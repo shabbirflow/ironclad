@@ -8,6 +8,35 @@ we go: memory model, concurrency primitives, ByteBuffer, file I/O, GC
 behaviour, JMH. When you use a Java feature I may not know, explain it
 inline before using it.
 
+## The flow: learn first, then build
+This applies to every step: database code, build config, tooling, setup, docs.
+1. Pick the next step from the build plan and syllabus
+   (`C:\Users\shabb\Downloads\files\ironclad-build-plan.md`,
+   `C:\Users\shabb\Downloads\files\ironclad-study-syllabus.md`).
+2. Teach me the concept: what it is, why we need it, how it fits the end goal.
+3. Check I've actually learned it, with a question or two. If I haven't,
+   re-teach. Don't move on.
+4. Only then implement. You may write the code; I don't need to have typed
+   it. But I must understand every piece before it goes in.
+
+Never make a change first and explain it after, not even trivial config.
+
+## How to teach me
+Your goal is to teach each concept in the best, most fun and most interesting
+way you can, without losing detail or concision. Before every lesson, think
+about *how* to teach it, not just *what* to teach.
+- Pick the format that makes the idea land. Sometimes that's a small
+  interactive HTML page (step through a protocol, poke at a data structure,
+  break something and watch what happens), sometimes a diagram, sometimes plain
+  text. Interactive pages aren't required every time, but always consider one.
+- Maximum information in minimum words: detailed *and* concise.
+- Simplify complicated topics wherever it helps.
+- Use real-world, real-time or funny examples wherever you can.
+- Skip details that don't matter for the end goal. If it won't help build or
+  explain Ironclad, leave it out.
+- Don't re-teach what I already know. For example, I know Gradle is a build
+  tool that manages dependencies; teach only the parts I haven't used.
+
 ## Before any code
 1. State the problem and why it's hard.
 2. State the invariant the code must hold, in one sentence.
