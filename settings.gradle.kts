@@ -1,1 +1,1 @@
-rootProject.name = "ironclad_db"
+rootProject.name = "ironclad"
