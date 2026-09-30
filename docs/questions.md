@@ -8,19 +8,6 @@ Lesson pages:
 
 ---
 
-## What is a milestone, and what is 0.3?
-
-A numbered, checkable step in the build plan, written `phase.step`. Each has a
-"Done when" line that proves it is finished.
-
-Milestone 0.3 is a ~150-line Java program that speaks Maelstrom's language:
-read a line of JSON from stdin, act, write a line of JSON to stdout. It is done
-when the `echo` workload passes.
-
-It comes now, in Phase 0, to de-risk: if Java + Maelstrom + WSL cannot work
-together, finding out today costs an afternoon. Finding out in month four costs
-the Raft work that depends on it.
-
 ## Is Maelstrom for testing nodes, or client-to-server, or server-to-server?
 
 All of it, and it is a test harness, not a communication library. Think JUnit
