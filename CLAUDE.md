@@ -37,6 +37,11 @@ about *how* to teach it, not just *what* to teach.
 - Don't re-teach what I already know. For example, I know Gradle is a build
   tool that manages dependencies; teach only the parts I haven't used.
 
+## Notes file
+
+Whenever I ask a technical question, append it to `docs/questions.md` with a
+short answer, so I can revise it later. Keep entries brief, newest last.
+
 ## Before any code
 1. State the problem and why it's hard.
 2. State the invariant the code must hold, in one sentence.
