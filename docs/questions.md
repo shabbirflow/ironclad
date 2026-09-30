@@ -123,3 +123,21 @@ because nodes avoid talking to each other: they do talk, via Maelstrom.)
 Code 0, timeout, which is indefinite: the write may still commit a second later.
 A definite error would promise it never happened, and that becomes a
 linearizability violation the moment the value shows up.
+
+## What is "the client" in "write a Maelstrom client"?
+
+Confusing word, because my program is a *node*, i.e. a server. "Client" here
+means client of Maelstrom's protocol, in the same sense as "HTTP client" or
+"Kafka client": the code that knows how to speak someone else's message format.
+
+Its whole job: read a line from stdin, turn the text into an object, hand it to
+the right handler, turn the answer back into text, write exactly one line and
+flush. It is a receptionist, and it knows nothing about databases.
+
+```
+Maelstrom  <-> stdin/stdout <->  [ protocol client ]  ->  my logic
+                                   (0.3, ~150 lines)      (echo now, Raft later)
+```
+
+In Phase 3 the same class becomes one implementation of the transport interface,
+with TCP sockets as the other.
