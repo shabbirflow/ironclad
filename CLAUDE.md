@@ -37,6 +37,18 @@ about *how* to teach it, not just *what* to teach.
 - Don't re-teach what I already know. For example, I know Gradle is a build
   tool that manages dependencies; teach only the parts I haven't used.
 
+## How deep to go
+
+Teach only as deep as the next step needs. Split it like this:
+- **Scaffolding** (Maelstrom, Gradle, WSL, CI, tooling): just enough to make the
+  next move, then learn the rest when it actually blocks me.
+- **The core** (low-level Java, storage engine, MVCC, Raft): real depth, because
+  this is what the project exists to teach me.
+
+I do not need to understand a tool completely before we start using it. Prefer
+learning while building over finishing a tutorial first. If a lesson is growing
+past what the next step needs, cut it and move on.
+
 ## Notes file
 
 Whenever I ask a technical question, append it to `docs/questions.md` with a
