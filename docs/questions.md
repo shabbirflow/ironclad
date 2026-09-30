@@ -141,3 +141,53 @@ Maelstrom  <-> stdin/stdout <->  [ protocol client ]  ->  my logic
 
 In Phase 3 the same class becomes one implementation of the transport interface,
 with TCP sockets as the other.
+
+## What is a record?
+
+A one-line immutable data class. Java generates the constructor, the accessors,
+equals, hashCode and toString from the header. Built into the language since 16.
+
+```java
+record Echo(Long msgId, String echo) implements Body {}
+```
+replaces roughly 40 lines of POJO, or Lombok's @Value. Accessors are named after
+the component: `e.echo()`, not `e.getEcho()`. Fields are final, so there are no
+setters. Good for messages, because a message that arrived is a fact, and no
+code path should be able to rewrite it half way through handling.
+
+## What is a sealed interface?
+
+A normal interface can be implemented by anyone, anywhere, so the compiler can
+never know the full set of implementors. A **sealed** interface lists exactly
+which types may implement it (explicitly with `permits`, or implicitly when they
+are all nested in the same file).
+
+The payoff: a `switch` over it is checked for exhaustiveness. Forget a case and
+the build fails. An enum is a fixed set of *values*; a sealed interface is a
+fixed set of *shapes*, each carrying its own fields.
+
+Old habit, with no safety net:
+```java
+if (body instanceof Echo) { ... } else if (body instanceof Init) { ... }
+```
+New version, where the compiler is on your side:
+```java
+Body reply = switch (body) {
+    case Body.Init init -> initOk(init);
+    case Body.Echo echo -> echoOk(echo);
+    // miss a case -> "the switch statement does not cover all possible input values"
+};
+```
+The pattern `case Body.Echo echo` also binds an already-typed variable, so there
+is no cast.
+
+## Where is replyWith used?
+
+In the read-reply loop, once, at the moment of writing the reply:
+```java
+Message request = mapper.readValue(line, Message.class);
+Body reply = switch (request.body()) { ... };
+out.write(mapper.writeValueAsString(request.replyWith(reply)));
+```
+It exists so that the src/dest swap is written in exactly one place, instead of
+at every reply site where it could be forgotten.
