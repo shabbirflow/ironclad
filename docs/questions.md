@@ -107,3 +107,19 @@ Effectively identical where it matters, so A stays.
   far slower than any packaging difference. If node startup ever matters, copy
   `build/install/ironclad` into the Linux filesystem, or look at AppCDS. Do not
   reach for a fat jar to fix it.
+
+## Lesson 3 check answers, in one line each
+
+**Why can't a node get its name as a command-line argument instead of via init?**
+Every node is launched by the same script with no per-node arguments, so identity
+has to arrive in-band, and `init` is the only channel there is.
+
+**A node replies to two requests in the wrong order. Why doesn't that break?**
+Replies are matched by `in_reply_to`, not by arrival order, so the client tracks
+its own outstanding msg_ids and does not care which comes back first. (Not
+because nodes avoid talking to each other: they do talk, via Maelstrom.)
+
+**Write sent to followers, nothing heard before the deadline. Which error code?**
+Code 0, timeout, which is indefinite: the write may still commit a second later.
+A definite error would promise it never happened, and that becomes a
+linearizability violation the moment the value shows up.
