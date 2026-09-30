@@ -52,3 +52,41 @@ dependency needs no manual work.
   protocol only. Test libraries get added when a milestone needs them.
 - rootProject.name = "ironclad", so the launcher is bin/ironclad rather than
   bin/ironclad_db. Package renamed org.example -> io.github.shabbirflow.ironclad.
+
+## 2026-09-30 — Milestone 0.3: the Maelstrom client
+
+**Built.** `Message` (the src/dest/body envelope), `Body` (sealed interface, one
+record per type), `Node` (the logic, currently echo), `MaelstromClient` (read a
+line, parse, ask the Node, write one flushed line), `Main` (wires the real pipes).
+Six JUnit tests, then the real gate: `maelstrom test -w echo` reports
+`:valid? true`, 25 of 25 operations OK.
+
+**Invariant.** Every request read from stdin produces exactly one complete,
+flushed JSON line on stdout, addressed to its sender with `in_reply_to` set to
+that request's `msg_id`, and nothing else ever reaches stdout.
+
+**Chose.**
+- Records + sealed interface + exhaustive switch (option A) over a generic
+  `JsonNode` body. Costs Jackson annotations; buys a compile error instead of a
+  silently unhandled message type. With 15 Raft message types that trade is
+  obvious, and the build plan asks for this shape in 3.1 anyway.
+- `Body.Unknown` as Jackson's `defaultImpl`, so an unmodelled type costs one
+  error reply (code 10) instead of the run.
+- `Long msgId`, not `long`: absent means null, where a primitive would silently
+  become 0 and produce `in_reply_to: 0`, matching no request.
+- The client takes a `Reader`/`Writer`, not `System.in`/`System.out`, so tests
+  drive it with strings in milliseconds.
+- Single-threaded loop. Raft will add timers, and at that point stdout needs one
+  dedicated writer, because two threads writing half-lines splice them together.
+- `out.write('\n')` rather than `newLine()`, which would emit `\r\n` on Windows
+  and break framing.
+- Explicit UTF-8 in `Main`, not the platform default.
+- Unparseable input line: log to stderr and continue, never fatal.
+
+**Rejected.** Replying to `*_ok` bodies. A reply to a reply ping-pongs forever
+between two nodes; `handle` returns `Optional.empty()` for those, and a test
+pins it.
+
+**Not done, deliberately.** Gossip Glomers challenges 2 and 3. Unique-ids is
+optional and broadcast teaches gossip, which Raft does not use. Echo passing is
+what 0.3 existed to prove: Java, Gradle, WSL and Maelstrom work together.
