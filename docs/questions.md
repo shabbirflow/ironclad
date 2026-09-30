@@ -191,3 +191,33 @@ out.write(mapper.writeValueAsString(request.replyWith(reply)));
 ```
 It exists so that the src/dest swap is written in exactly one place, instead of
 at every reply site where it could be forgotten.
+
+## Sealed interface, the monkey version
+
+```java
+public sealed interface Monkey {
+    record Capuchin(int tinyHats)      implements Monkey {}
+    record Howler(int decibels)        implements Monkey {}
+    record Mandrill(String faceColour) implements Monkey {}
+}
+
+String feed(Monkey m) {
+    return switch (m) {                       // no default branch needed
+        case Monkey.Capuchin c -> "banana, plus " + c.tinyHats() + " tiny hats";
+        case Monkey.Howler h   -> "mango, and earplugs at " + h.decibels() + " dB";
+        case Monkey.Mandrill d -> "figs, and compliment the " + d.faceColour();
+    };
+}
+```
+
+Three monkeys on the enclosure sign, and nobody can smuggle in a fourth. Add
+`record Gibbon(int armSpan)` and the build breaks with "the switch expression
+does not cover all possible input values": I cannot ship until I have said what
+a gibbon eats. Without `sealed`, someone in another package writes
+`class RobotMonkey implements Monkey` and my switch either explodes at runtime or
+silently feeds it bananas.
+
+Monkey is Body. Capuchin/Howler/Mandrill are Init/Echo/Error. feed() is the
+message handler. In Phase 3, adding RequestVote will march me to every place that
+handles messages. An enum cannot do this: enums are a fixed set of values, all
+the same shape; a sealed interface is a fixed set of shapes with their own fields.
