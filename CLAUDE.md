@@ -49,6 +49,12 @@ I do not need to understand a tool completely before we start using it. Prefer
 learning while building over finishing a tutorial first. If a lesson is growing
 past what the next step needs, cut it and move on.
 
+## Deferred work
+
+When we knowingly choose a simpler option for now, record it in
+`docs/deferred.md` with the trigger that should bring it back, and check that
+file when starting a milestone.
+
 ## Notes file
 
 Whenever I ask a technical question, append it to `docs/questions.md` with a
