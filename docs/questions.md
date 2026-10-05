@@ -430,3 +430,38 @@ Caveat: the random-write penalty was brutal on spinning disks (physically moving
 an arm). On NVMe it is much smaller, but LSM still wins, because flash erases in
 large blocks and overwriting one key in place makes the drive copy a whole block
 behind your back. That is write amplification, measured in milestone 1.9.
+
+## What is LSM?
+
+Log-Structured Merge tree. Not a tree data structure; an architecture, and it is
+exactly what Phase 1 builds.
+
+- **Log-structured**: never modify in place, only append. A new value is written
+  in front of the old one rather than over it.
+- **Merge**: because old data piles up, a background process merges files and
+  drops superseded values. Without it, reads get slower forever.
+
+```
+writes -> WAL (append) + memtable (sorted, RAM)        milestones 1.1, 1.2
+                          | flush when full
+                        SSTable, SSTable, SSTable ...  1.3, 1.4
+                          | merge when too many
+                        fewer, bigger SSTables         1.7 compaction
+reads  -> memtable, then files newest to oldest,
+          bloom filters to skip files                  1.5, 1.6
+```
+
+The rival family is the **B-tree**, which updates pages in place: find the page,
+read it, modify it, write it back, all random I/O.
+
+| | Writes | Reads | Used by |
+|---|---|---|---|
+| LSM | sequential, fast | slower, several files to check | RocksDB, LevelDB, Cassandra |
+| B-tree | random, slower | fast, one place to look | PostgreSQL, InnoDB, SQLite |
+
+An LSM is a diary: always write at the end, occasionally consolidate. A B-tree is
+an address book: every entry has its place, so inserting in the middle means
+rewriting the page.
+
+The idea behind all of it: optimise **two** of {write cost, read cost, space},
+never all three. LSM buys cheap writes and pays in read cost and space.
