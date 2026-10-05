@@ -206,3 +206,45 @@ machine belongs in a write-up without a methodology note.
 node arrays, or an arena of primitives) closes the gap. It needs a quiet machine
 and a real experiment, and it is worth nothing until the engine works end to end.
 Noted for milestone 1.9, where there will also be an fsync to compare against.
+
+## 2026-10-05 — Milestone 1.2, part 1: the record codec
+
+**Built.** `WalRecord` (sealed: Put and Delete), `DecodeResult` (sealed: Ok,
+Incomplete, Corrupt) and `WalCodec`, with 10 tests driven entirely in memory.
+
+**Layout, big-endian because an on-disk format must choose a byte order rather
+than inherit the machine's:**
+
+```
+[ crc32c : 4 ][ length : 4 ][ payload : length bytes ]
+payload = [ kind : 1 ][ keyLen : varint ][ key ][ valueLen : varint ][ value ]
+          kind 1 = put, 2 = delete (stops after the key)
+```
+
+**Chose.**
+- Checksum over length and payload (option B), with a 16 MB ceiling checked
+  before the length is believed, so a corrupt length cannot make us allocate
+  gigabytes.
+- Varints for the lengths: a 20-byte key spends one byte on its length instead of
+  four, and the WAL is the file written most.
+- A `kind` byte, because `remove` exists and a replay that only knew about puts
+  would resurrect every deleted key.
+- `DecodeResult` as a sealed result type rather than exceptions: "the file ended
+  mid-record" is how a crashed log normally ends, not an error, and recovery has
+  to tell it apart from corruption.
+- Codec separate from any file handling, so corruption tests are three lines of
+  buffer poking instead of a test nobody writes.
+
+**Corrected: option B is not measurably stronger than option A.** Mutating the
+codec so the checksum covers only the payload leaves all 10 tests passing. The
+reason is that a corrupted length makes the decoder hash the wrong range of
+bytes, so the checksum fails either way: header corruption is caught indirectly
+without being covered. LevelDB checksums only its type and data for this reason.
+B is kept because it costs nothing and makes the detection direct, but the
+earlier claim that it "detects more corruption" was overstated, and no test here
+can tell the two apart.
+
+**Verified the tests bite.** Besides the mutation above, the suite covers a
+flipped payload bit, a flipped length bit, an impossible length, every truncation
+from 0 bytes to one short of complete (each must be Incomplete, not Corrupt), and
+reading three records back to back from one buffer.

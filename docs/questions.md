@@ -533,3 +533,42 @@ fighting it.
 **And the decision stays reversible.** Program against a small `Memtable`
 interface, keep CSLM as the benchmark baseline, and swapping implementations is a
 one-line change if the numbers ever demand it.
+
+## What is a codec?
+
+Coder plus decoder: the pair of functions turning an object into bytes and back.
+
+```java
+ByteBuffer   encode(WalRecord record)   // object -> bytes for the file
+DecodeResult decode(ByteBuffer bytes)   // bytes from the file -> object
+```
+
+Same word as in "video codec": H.264 encodes frames to bytes and decodes them
+back. Jackson is a JSON codec. Ours is binary, because JSON would be several
+times larger and slower, and the WAL is the file written most.
+
+It is a separate class from the file-writing code so the byte layout can be
+tested with no files at all, including by handing it **deliberately corrupted
+bytes**, which is the whole point of having a checksum.
+
+## Is the "longest contiguous prefix" in the data or in the WAL?
+
+In the WAL file. The log is a list of events in time:
+
+```
+r1  put a=1
+...
+r55 put k=9
+r56 ####  torn        <- recovery stops here
+r57 delete b          <- discarded even though intact
+```
+
+The prefix is records r1..r55, a prefix of the **file**, in append order. Nothing
+is truncated in key order: replaying r1..r55 rebuilds the memtable to exactly the
+state it had when r55 became durable. The data is **rewound in time**, not
+missing a range of keys.
+
+That is the difference between the two: the log holds operations, the memtable
+holds state. A prefix of operations always produces a state that really existed.
+A subset with a hole in it produces a state that never existed, which is why r57
+goes even when its bytes are fine.
