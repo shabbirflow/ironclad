@@ -326,3 +326,35 @@ ends and the process exits.
 In the tests the same line comes from a `StringReader` instead. Identical
 interface, no process, no pipes, which is exactly why the client takes a `Reader`
 rather than reaching for `System.in` itself.
+
+## What are JMH, a benchmark, and a "harness"?
+
+**Harness**: the rig you strap your code into so something else can run and
+measure it. Maelstrom is a *test* harness (runs my nodes, checks the history).
+JMH is a *benchmark* harness (runs one method, times it honestly).
+
+**JMH** = Java Microbenchmark Harness, from the OpenJDK team. Timing a loop with
+`System.nanoTime` lies, because the JIT compiler attacks the benchmark:
+- *dead code elimination*: a result never used means the call is deleted, and an
+  empty loop reports a million ops/sec
+- *warmup*: the first runs are interpreted, then compiled, so early numbers
+  measure the compiler
+- *constant folding*: same input every time can be computed once and reused
+
+JMH forks a fresh JVM, runs warmup iterations before measuring, feeds results
+into a `Blackhole` so nothing can be optimised away, and reports a distribution.
+
+First result, parsing one Maelstrom message: **2.14 ops/us**, about 2.1 million
+messages a second. That is the protocol's own overhead, and it is nowhere near
+being the bottleneck.
+
+## Is CI just automating the tests?
+
+Yes. On every push, a fresh Ubuntu machine checks out the repo, installs JDK 21,
+runs `./gradlew test`, and marks the commit pass or fail. Maelstrom runs stay
+local: they need Maelstrom installed and take minutes.
+
+One real gotcha found while setting it up: git had `gradlew` recorded as mode
+100644, with no execute bit, because Windows has no such bit. On the Linux runner
+`./gradlew` would have failed with "Permission denied". Fixed with
+`git update-index --chmod=+x gradlew`. Same lesson as Maelstrom's launcher script.

@@ -1,5 +1,8 @@
 plugins {
     application
+    // Generates the JMH runner code and adds the src/jmh source set, so a
+    // benchmark is a @Benchmark method and `./gradlew jmh` is the whole command.
+    id("me.champeau.jmh") version "0.7.3"
 }
 
 group = "io.github.shabbirflow"

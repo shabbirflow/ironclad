@@ -90,3 +90,29 @@ pins it.
 **Not done, deliberately.** Gossip Glomers challenges 2 and 3. Unique-ids is
 optional and broadcast teaches gossip, which Raft does not use. Echo passing is
 what 0.3 existed to prove: Java, Gradle, WSL and Maelstrom work together.
+
+## 2026-10-05 — Milestone 0.4: CI and the benchmark harness
+
+**Built.** `.github/workflows/ci.yml` running `./gradlew test` plus
+`jmhClasses` on every push and pull request, and one JMH benchmark
+(`MessageParseBenchmark`) measuring the cost of parsing a Maelstrom message.
+First number: 2.14 ops/us, around 2.1 million messages a second.
+
+**Chose.**
+- The `me.champeau.jmh` Gradle plugin (0.7.3) over wiring the annotation
+  processor and source set by hand. One line of config instead of fifteen, and
+  benchmark plumbing is not where the learning budget belongs.
+- A benchmark that measures something real (message parsing) rather than a
+  placeholder, so the number is worth looking at even though the point was to
+  prove the harness runs.
+- Small iteration counts (1 fork, 3 warmup, 3 measurement) so the smoke test
+  takes seconds. Real runs at 1.1 will use proper counts.
+- CI compiles benchmarks but does not run them: shared CI runners have noisy
+  neighbours, so timings from them would be worthless.
+- Unit tests only in CI. Maelstrom runs need Maelstrom installed and take
+  minutes; they stay local and deliberate.
+
+**Fixed.** git had `gradlew` as mode 100644, with no execute bit, because
+Windows does not track one. `./gradlew` on the Linux runner would have failed
+with "Permission denied" on the very first CI run. `git update-index --chmod=+x`
+records it. Exactly the trap from lesson 2, met for real.
