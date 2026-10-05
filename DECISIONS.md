@@ -116,3 +116,52 @@ First number: 2.14 ops/us, around 2.1 million messages a second.
 Windows does not track one. `./gradlew` on the Linux runner would have failed
 with "Permission denied" on the very first CI run. `git update-index --chmod=+x`
 records it. Exactly the trap from lesson 2, met for real.
+
+## 2026-10-05 — Milestone 1.1: the skip list, and losing to the JDK
+
+**Built.** `SkipList`: byte[] keys ordered by `Arrays.compareUnsigned`, coin-flip
+heights capped at 12 lanes, head sentinel, `put` / `get` / `remove` / `Iterable`,
+running byte total for the future flush threshold. 16 tests with `TreeMap` as the
+oracle, including 30,000 random put/get/remove operations under fixed seeds.
+
+**Chose.**
+- Single-threaded (option 1A). A wrong answer should have exactly one possible
+  cause. Concurrency gets its own milestone, with these tests and this benchmark
+  already in place to price it.
+- `byte[]` keys (option 2A), because that is what the SSTables will hold, and
+  `String` ordering is UTF-16 code-unit order, not unsigned byte order. Changing
+  key type later would silently change sort order, which the whole engine rests on.
+- `remove` physically unlinks the node rather than storing a tombstone. This
+  class is a sorted map; shadowing values that already reached disk is the
+  engine's rule, and belongs in milestone 1.5. It also keeps the comparison with
+  ConcurrentSkipListMap honest, since that is what its `remove` does.
+- `Iterable<Entry>` rather than a `Consumer`, so flushing and milestone 1.8's
+  merge iterator both read as ordinary loops.
+- An injectable `Random`, so a failure in a probabilistic structure replays.
+
+**Measured** (JMH, 1 fork, 3x1s warmup, 3x1s measurement, 8192 random 16-byte
+keys, 100-byte values, single thread, on a laptop — indicative, not publishable):
+
+| benchmark | ours | ConcurrentSkipListMap |
+|---|---|---|
+| insert (per key) | 2.63 ops/us | 2.79 ops/us |
+| get, key present | 2.97 ops/us | 3.66 ops/us |
+| get, key absent | 2.82 ops/us | 3.58 ops/us |
+| full ordered scan (per key) | 172 ops/us | 457 ops/us |
+
+**We lose, and the reason is memory layout, not algorithm.** Each of our nodes
+holds its tower as a separate `Node[]` object, so following one pointer is two
+dereferences: node, then its array, then the slot. Two objects to pull into cache
+per hop instead of one. The JDK's structure uses dedicated index nodes with
+direct fields, so a hop is one dereference, and Doug Lea has had a decade to tune
+the layout. Our scan also allocates an `Entry` record per step.
+
+Insert is a statistical tie (error bars overlap). The scan gap, 2.7x, is the one
+that is unambiguous, and it is the operation a flush performs.
+
+**Deliberately not fixed yet.** Flattening the tower, or iterating without
+allocating, are real optimisations with real numbers behind them now. They belong
+after the engine works end to end, and the benchmark exists to prove any change
+helps. Using the JDK's map instead would have been the fastest path and would
+have taught nothing: the point of writing this was to be able to explain the gap,
+and the explanation is the deliverable.

@@ -168,6 +168,41 @@ public final class SkipList implements Iterable<SkipList.Entry> {
     }
 
     /**
+     * Unlinks the key, returning true if it was here.
+     *
+     * Physical removal, not a tombstone: this class is a sorted map and knows
+     * nothing about shadowing values in older files. The engine writes tombstones
+     * at the layer above, in milestone 1.5, because a delete has to hide values
+     * that already reached disk.
+     *
+     * Bugs live here. The node must be unlinked from every lane it reaches and no
+     * further: predecessors[lane].next[lane] is the target only for lanes the
+     * target actually occupies, which is why the loop bounds are the target's own
+     * height rather than the list's.
+     */
+    public boolean remove(byte[] key) {
+        Node[] predecessors = findPredecessors(key);
+        Node target = predecessors[0].next[0];
+        if (target == null || compare(target.key, key) != 0) {
+            return false;
+        }
+
+        for (int lane = 0; lane < target.next.length; lane++) {
+            predecessors[lane].next[lane] = target.next[lane];
+        }
+
+        // Give back the empty top lanes, so later searches do not start above the
+        // tallest node that is actually left.
+        while (height > 1 && head.next[height - 1] == null) {
+            height--;
+        }
+
+        size--;
+        sizeInBytes -= key.length + target.value.length + ENTRY_OVERHEAD_BYTES;
+        return true;
+    }
+
+    /**
      * Walks lane 0 from the first key to the last, which is every entry in
      * ascending order. This walk is what a flush writes to disk: one sweep, no
      * sorting step.

@@ -200,4 +200,99 @@ class SkipListTest {
         assertThatExceptionOfType(NoSuchElementException.class)
                 .isThrownBy(() -> list.iterator().next());
     }
+
+    /** Catches: a delete that leaves the key findable, or breaks the lane-0 chain. */
+    @Test
+    void removeUnlinksTheKey() {
+        SkipList list = new SkipList();
+        for (String key : List.of("a", "b", "c")) {
+            list.put(b(key), b(key));
+        }
+
+        assertThat(list.remove(b("b"))).isTrue();
+        assertThat(list.get(b("b"))).isNull();
+        assertThat(list.size()).isEqualTo(2);
+
+        List<String> keys = new ArrayList<>();
+        list.forEach(entry -> keys.add(s(entry.key())));
+        assertThat(keys).containsExactly("a", "c");
+    }
+
+    /** Catches: removing something absent reporting success, or corrupting the list. */
+    @Test
+    void removingAMissingKeyChangesNothing() {
+        SkipList list = new SkipList();
+        list.put(b("a"), b("1"));
+        long bytesBefore = list.sizeInBytes();
+
+        assertThat(list.remove(b("nope"))).isFalse();
+        assertThat(list.size()).isEqualTo(1);
+        assertThat(list.sizeInBytes()).isEqualTo(bytesBefore);
+    }
+
+    /** Catches: a removed node's tower left dangling, so the key cannot be re-inserted. */
+    @Test
+    void keyCanBeReinsertedAfterRemoval() {
+        SkipList list = new SkipList(new Random(99L));
+        for (int i = 0; i < 200; i++) {
+            list.put(b("k" + i), b("v" + i));
+        }
+
+        for (int i = 0; i < 200; i += 2) {
+            assertThat(list.remove(b("k" + i))).isTrue();
+        }
+        for (int i = 0; i < 200; i += 2) {
+            list.put(b("k" + i), b("again" + i));
+        }
+
+        assertThat(list.size()).isEqualTo(200);
+        assertThat(s(list.get(b("k0")))).isEqualTo("again0");
+        assertThat(s(list.get(b("k1")))).isEqualTo("v1");
+    }
+
+    /** Catches: bytes not returned on removal, so the memtable would flush too early forever. */
+    @Test
+    void removeGivesBackTheBytes() {
+        SkipList list = new SkipList();
+        long empty = list.sizeInBytes();
+        list.put(b("key"), b("value"));
+        list.remove(b("key"));
+
+        assertThat(list.sizeInBytes()).isEqualTo(empty);
+    }
+
+    /**
+     * Catches: anything the small tests miss, now with deletes in the mix. The
+     * seeds make any failure replayable.
+     */
+    @Test
+    void agreesWithTreeMapOnRandomPutsGetsAndRemoves() {
+        Random ops = new Random(31337L);
+        SkipList list = new SkipList(new Random(11L));
+        TreeMap<String, String> oracle = new TreeMap<>();
+
+        for (int i = 0; i < 30_000; i++) {
+            String key = "k" + ops.nextInt(300);
+            switch (ops.nextInt(4)) {
+                case 0 -> {
+                    byte[] actual = list.get(b(key));
+                    assertThat(actual == null ? null : s(actual)).isEqualTo(oracle.get(key));
+                }
+                case 1 -> assertThat(list.remove(b(key))).isEqualTo(oracle.remove(key) != null);
+                default -> {
+                    String value = "v" + i;
+                    list.put(b(key), b(value));
+                    oracle.put(key, value);
+                }
+            }
+        }
+
+        assertThat(list.size()).isEqualTo(oracle.size());
+
+        List<String> ours = new ArrayList<>();
+        list.forEach(entry -> ours.add(s(entry.key()) + "=" + s(entry.value())));
+        assertThat(ours).isEqualTo(oracle.entrySet().stream()
+                .map(e -> e.getKey() + "=" + e.getValue())
+                .toList());
+    }
 }
