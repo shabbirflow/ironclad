@@ -298,3 +298,31 @@ followed by '\n', then flush.
 ```
 In `send(Message message)`, `message` is the parameter: the reply built on the
 line above.
+
+## Where does the line of text come from?
+
+From Maelstrom, through the stdin pipe, via three wrappers:
+
+```
+Maelstrom (in WSL) writes a line into the pipe
+        |
+        v
+System.in              raw bytes (fd 0)
+InputStreamReader      bytes -> characters, decoded as UTF-8
+BufferedReader         characters -> lines, split on '\n'
+        |
+        v
+in.readLine()          one JSON message as a String
+```
+
+`Main` builds the first two and hands them to the client; the client's
+constructor wraps them in a `BufferedReader`. That is the only reason
+`readLine()` exists: `System.in` has no idea what a line is.
+
+`readLine()` **blocks**: the thread parks there, using no CPU, until a line
+arrives. It returns null when Maelstrom closes the pipe, which is how the run
+ends and the process exits.
+
+In the tests the same line comes from a `StringReader` instead. Identical
+interface, no process, no pipes, which is exactly why the client takes a `Reader`
+rather than reaching for `System.in` itself.

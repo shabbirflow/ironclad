@@ -61,6 +61,8 @@ public final class MaelstromClient {
     /** Runs until stdin closes, which is Maelstrom's way of saying the test is over. */
     public void run() throws IOException {
         String line;
+        // readLine() parks here until Maelstrom writes a line into our stdin pipe,
+        // and returns null when Maelstrom closes it, which ends the run.
         while ((line = in.readLine()) != null) {
             if (line.isBlank()) {
                 continue;
@@ -74,9 +76,13 @@ public final class MaelstromClient {
                 log.println("ignoring unparseable line: " + e.getOriginalMessage());
                 continue;
             }
-            Optional<Body> reply = node.handle(request.body());
-            if (reply.isPresent()) {
-                send(request.replyWith(reply.get()));
+            // The node answers with a body: the letter, carrying no addresses. Or
+            // with nothing at all, when the message needs no reply.
+            Optional<Body> maybeLetter = node.handle(request.body());
+            if (maybeLetter.isPresent()) {
+                Body letter = maybeLetter.get();
+                Message envelope = request.replyWith(letter);   // from us, back to the sender
+                send(envelope);
             }
         }
     }
