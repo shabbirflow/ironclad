@@ -391,3 +391,42 @@ one line and `replyLinesFor(INIT, echo)` passes two.
 The client stops when the StringReader runs out, exactly as it stops when
 Maelstrom closes the real pipe: `readLine()` returns null either way. That is the
 payoff of taking a `Reader` and a `Writer` instead of using System.in directly.
+
+## What is a memtable?
+
+A sorted map living in RAM that holds the most recent writes. That is all it is.
+
+Life of one write:
+1. appended to the **WAL** on disk (safety only, read just after a crash)
+2. inserted into the **memtable** in RAM (sorted; this is what reads hit)
+3. when the memtable hits its size limit, it is frozen, written out as one
+   sorted file (an SSTable), and an empty memtable takes over
+
+Reads check the memtable first because it holds the newest data, then the files
+newest to oldest. A crash destroys the memtable and that is fine: the WAL has
+every write, so startup replays the log and rebuilds it.
+
+Like a desk inbox kept in alphabetical order. You do not walk to the filing
+cabinet for each sheet; the tray fills, and because it is already sorted, filing
+the stack is one pass with no sorting.
+
+## Does mem = memory and SS = secondary storage?
+
+mem = memory, yes. **SS = "Sorted String"**, not secondary storage. The term is
+from Google's Bigtable paper: an SSTable is an immutable file of key-value pairs
+sorted by key, where keys and values are byte strings.
+
+memtable = sorted table in memory. SSTable = sorted table in a file.
+
+**Secondary storage** (persistent, block-addressed): NVMe SSD, SATA SSD, HDD,
+SD card, USB flash, cloud block storage such as EBS (a disk over a network).
+**Primary** storage is RAM, plus CPU caches and registers. Tape is tertiary.
+
+Why it matters: every Phase 1 design choice exists to hide the cost of secondary
+storage. Append instead of overwrite, buffer in RAM, write one big sorted file
+sequentially instead of many small random writes.
+
+Caveat: the random-write penalty was brutal on spinning disks (physically moving
+an arm). On NVMe it is much smaller, but LSM still wins, because flash erases in
+large blocks and overwriting one key in place makes the drive copy a whole block
+behind your back. That is write amplification, measured in milestone 1.9.
