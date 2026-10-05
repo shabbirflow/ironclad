@@ -66,6 +66,8 @@ public class SkipListBenchmark {
             ours.put(key, value);
             jdk.put(key, value);
         }
+
+        buildFlat();
     }
 
     // ---- insert: a fresh structure each invocation, so both pay construction ----
@@ -127,6 +129,74 @@ public class SkipListBenchmark {
     public void scanJdk(Blackhole hole) {
         for (Map.Entry<byte[], byte[]> entry : jdk.entrySet()) {
             hole.consume(entry.getKey());
+        }
+    }
+
+    // ---- these two were an experiment whose hypothesis turned out to be wrong ----
+    //
+    // The guess was that scanOurs lost because it allocates an Entry per step.
+    // The gc profiler killed that: gc.alloc.rate.norm is around 10^-6 B/op for
+    // every variant here, including the ones that "allocate". Escape analysis
+    // deletes the Entry outright, because it never leaves the loop.
+    //
+    // So these measure call shape (visitor callback versus iterator), not
+    // allocation. Kept because the comparison is still informative, and because
+    // the dead hypothesis is worth remembering.
+
+    @Benchmark
+    @OperationsPerInvocation(KEYS)
+    public void scanOursNoAlloc(Blackhole hole) {
+        ours.visitAll((key, val) -> hole.consume(key));
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(KEYS)
+    public void scanJdkNoAlloc(Blackhole hole) {
+        for (byte[] key : jdk.keySet()) {
+            hole.consume(key);
+        }
+    }
+
+    /**
+     * The layout control. A bare singly-linked list over the same keys, where
+     * next is a direct field, so a hop is one dereference instead of two.
+     *
+     * Our skip list's lane-0 walk does the same logical work, but reads
+     * node.next[0], which means node, then its Node[] array object, then the
+     * slot: two objects pulled into cache per step instead of one. If this
+     * baseline is much faster than scanOurs, that indirection is the cost.
+     */
+    static final class Flat {
+        byte[] key;
+        byte[] value;
+        Flat next;
+    }
+
+    private Flat flatHead;
+
+    /** Called from setUp: JMH does not order two @Setup methods, and this needs keys. */
+    private void buildFlat() {
+        byte[][] sorted = keys.clone();
+        Arrays.sort(sorted, Arrays::compareUnsigned);
+        Flat previous = null;
+        for (byte[] key : sorted) {
+            Flat node = new Flat();
+            node.key = key;
+            node.value = value;
+            if (previous == null) {
+                flatHead = node;
+            } else {
+                previous.next = node;
+            }
+            previous = node;
+        }
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(KEYS)
+    public void scanFlatBaseline(Blackhole hole) {
+        for (Flat node = flatHead; node != null; node = node.next) {
+            hole.consume(node.key);
         }
     }
 }

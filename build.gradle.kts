@@ -27,6 +27,21 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
+// Benchmark harness defaults. One fork and three iterations is enough for a
+// smoke test and useless for a result: on a laptop the error bars can exceed the
+// score. These defaults are strong enough to compare two implementations, and
+// `-Pbench=<regex>` narrows the run so it finishes in minutes.
+//
+// The gc profiler reports bytes allocated per operation, which answers "is this
+// allocation or is this layout" with a measurement rather than a guess.
+jmh {
+    (project.findProperty("bench") as String?)?.let { includes = listOf(it) }
+    fork = 2
+    warmupIterations = 5
+    iterations = 5
+    profilers = listOf("gc")
+}
+
 application {
     mainClass = "io.github.shabbirflow.ironclad.Main"
 }

@@ -165,3 +165,44 @@ after the engine works end to end, and the benchmark exists to prove any change
 helps. Using the JDK's map instead would have been the fastest path and would
 have taught nothing: the point of writing this was to be able to explain the gap,
 and the explanation is the deliverable.
+
+## 2026-10-05 — 1.1 follow-up: the allocation hypothesis was wrong
+
+**Claim being tested.** The previous entry blamed the scan gap on two things:
+per-entry allocation, and our two-dereference node layout.
+
+**Allocation: ruled out, by measurement.** JMH's `gc` profiler reports
+`gc.alloc.rate.norm` of roughly 10^-6 B/op for *every* scan variant, including
+the ones that construct an `Entry` per step. Escape analysis deletes the record
+outright, because it never leaves the loop; the JDK's `SimpleImmutableEntry`
+gets the same treatment. The "no allocation" variants therefore measure call
+shape (visitor callback versus iterator), not allocation. The earlier entry's
+claim about scan allocating is **wrong** and this corrects it.
+
+**Layout: supported but not proven.** Added `scanFlatBaseline`, a bare singly
+linked list over the same keys, where `next` is a direct field rather than an
+array slot. Within a single run the ordering is consistent:
+flat linked list and ConcurrentSkipListMap are close to each other, and our skip
+list is several times slower than both. That points at per-node indirection
+(node -> Node[] -> slot, so two objects per hop) rather than the algorithm.
+
+**The honest caveat, which matters more than the result.** Absolute numbers moved
+by 7x across runs on this laptop: our scan measured 153 ops/us under the Gradle
+plugin and 20 ops/us running the same jar directly minutes later, with tight
+error bars inside each run. Something environmental dominates (CPU frequency and
+power state, background load, repeated JMH runs heating the machine). So only
+**within-run** comparisons mean anything here, and no absolute figure from this
+machine belongs in a write-up without a methodology note.
+
+**Two process fixes applied.**
+- A `jmh` block in build.gradle.kts: 2 forks, 5 warmup and 5 measurement
+  iterations, the gc profiler always on, and `-Pbench=<regex>` to narrow a run.
+  One fork and three iterations is a smoke test, not a measurement.
+- Found and fixed a real benchmark bug: two `@Setup(Level.Trial)` methods, whose
+  order JMH does not guarantee, so the second could run before the data it
+  needed existed. Benchmarks need the same scrutiny as production code.
+
+**Open question, parked deliberately.** Whether flattening the tower (fixed-size
+node arrays, or an arena of primitives) closes the gap. It needs a quiet machine
+and a real experiment, and it is worth nothing until the engine works end to end.
+Noted for milestone 1.9, where there will also be an fsync to compare against.

@@ -202,6 +202,26 @@ public final class SkipList implements Iterable<SkipList.Entry> {
         return true;
     }
 
+    /** Receives a key and value without an object being created to hold them. */
+    public interface EntryVisitor {
+        void visit(byte[] key, byte[] value);
+    }
+
+    /**
+     * The same ordered walk as the iterator, but nothing is allocated per entry:
+     * the lambda is created once, and the key and value arrays are passed
+     * straight through.
+     *
+     * Exists because a flush walks every entry, and allocating a wrapper per
+     * entry turns a flush into garbage-collector work. The iterator stays for
+     * callers that want a plain loop.
+     */
+    public void visitAll(EntryVisitor visitor) {
+        for (Node node = head.next[0]; node != null; node = node.next[0]) {
+            visitor.visit(node.key, node.value);
+        }
+    }
+
     /**
      * Walks lane 0 from the first key to the last, which is every entry in
      * ascending order. This walk is what a flush writes to disk: one sweep, no

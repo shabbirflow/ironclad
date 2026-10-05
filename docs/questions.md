@@ -508,3 +508,28 @@ for (SkipList.Entry entry : list) {
 `Iterable` also provides `forEach` for free, so the lambda style still works for
 anyone who prefers it. Milestone 1.8 needs a real `Iterator` regardless, to merge
 several sorted sources.
+
+## Could we just use ConcurrentSkipListMap if ours is slower?
+
+Technically yes, and nothing in the engine would notice. Three reasons not to,
+and one that actually settles it.
+
+**It is not the bottleneck, by orders of magnitude.** Even at the worst measured
+figure, our scan walks 8192 keys in about 400 microseconds. A single `fsync` in
+milestone 1.2 costs 1 to 10 *milliseconds*. The memtable is 3 to 25 times cheaper
+than one durability call, and every write needs one of those. Optimising here
+while an fsync sits in the same write path is spending effort where it cannot
+show up.
+
+**The project exists to teach low-level Java.** The build plan says to write it
+anyway and benchmark it: "beating or losing to it, with an explanation of why, is
+a better story than using it". An interviewer cannot probe a library call.
+
+**CSLM cannot do what later milestones need.** Byte-accurate size accounting for
+flush thresholds, versioned keys in Phase 2 where a newer version of a key must
+sort first, and any off-heap or arena layout. We would end up wrapping it and
+fighting it.
+
+**And the decision stays reversible.** Program against a small `Memtable`
+interface, keep CSLM as the benchmark baseline, and swapping implementations is a
+one-line change if the numbers ever demand it.
