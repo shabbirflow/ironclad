@@ -13,9 +13,12 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The client reads from a Reader and writes to a Writer, so a test can drive it
- * with strings. No process, no pipes, no Maelstrom: milliseconds instead of
- * minutes, and the failure names the field that is wrong.
+ * IN ONE LINE: drives the client with fake pipes made of strings, so every
+ * protocol mistake is caught in milliseconds instead of during a Maelstrom run.
+ *
+ * The client reads from a Reader and writes to a Writer, so the test hands it a
+ * StringReader (pretending to be stdin) and a StringWriter (pretending to be
+ * stdout). No process, no pipes, and the failure message names the wrong field.
  */
 class MaelstromClientTest {
 
@@ -28,10 +31,10 @@ class MaelstromClientTest {
     /** Catches: addresses not swapped, missing in_reply_to, snake_case mapping. */
     @Test
     void answersInitWithInitOkAddressedBackToTheSender() throws Exception {
-        List<String> out = lines(INIT);
+        List<String> replies = replyLinesFor(INIT);
 
-        assertThat(out).hasSize(1);
-        Message reply = mapper.readValue(out.get(0), Message.class);
+        assertThat(replies).hasSize(1);
+        Message reply = mapper.readValue(replies.get(0), Message.class);
         assertThat(reply.src()).isEqualTo("n1");
         assertThat(reply.dest()).isEqualTo("c0");
         assertThat(reply.body()).isInstanceOfSatisfying(Body.InitOk.class,
@@ -41,11 +44,11 @@ class MaelstromClientTest {
     /** Catches: payload dropped or altered, wrong in_reply_to, reply sent to the wrong client. */
     @Test
     void echoesThePayloadBackUnchanged() throws Exception {
-        List<String> out = lines(INIT, """
+        List<String> replies = replyLinesFor(INIT, """
                 {"src":"c2","dest":"n1","body":{"type":"echo","msg_id":7,"echo":"Please echo 35"}}""");
 
-        assertThat(out).hasSize(2);
-        Message reply = mapper.readValue(out.get(1), Message.class);
+        assertThat(replies).hasSize(2);
+        Message reply = mapper.readValue(replies.get(1), Message.class);
         assertThat(reply.dest()).isEqualTo("c2");
         assertThat(reply.body()).isInstanceOfSatisfying(Body.EchoOk.class, ok -> {
             assertThat(ok.inReplyTo()).isEqualTo(7L);
@@ -56,11 +59,11 @@ class MaelstromClientTest {
     /** Catches: the node dying on a type we have not implemented. */
     @Test
     void unknownTypeBecomesAnErrorRatherThanACrash() throws Exception {
-        List<String> out = lines("""
+        List<String> replies = replyLinesFor("""
                 {"src":"c1","dest":"n1","body":{"type":"read","msg_id":4,"key":"x"}}""");
 
-        assertThat(out).hasSize(1);
-        Message reply = mapper.readValue(out.get(0), Message.class);
+        assertThat(replies).hasSize(1);
+        Message reply = mapper.readValue(replies.get(0), Message.class);
         assertThat(reply.body()).isInstanceOfSatisfying(Body.Error.class, err -> {
             assertThat(err.code()).isEqualTo(10);
             assertThat(err.inReplyTo()).isEqualTo(4L);
@@ -70,7 +73,7 @@ class MaelstromClientTest {
     /** Catches: replying to a reply, which would ping-pong between two nodes forever. */
     @Test
     void repliesAreNotThemselvesRepliedTo() throws Exception {
-        assertThat(lines("""
+        assertThat(replyLinesFor("""
                 {"src":"n2","dest":"n1","body":{"type":"echo_ok","msg_id":9,"in_reply_to":2,"echo":"hi"}}"""))
                 .isEmpty();
     }
@@ -78,28 +81,40 @@ class MaelstromClientTest {
     /** Catches: pretty-printing, and newLine() emitting \r\n on Windows. */
     @Test
     void everyMessageIsExactlyOneLineEndingInANewline() throws Exception {
-        String raw = raw(INIT);
+        String stdout = rawStdoutFor(INIT);
 
-        assertThat(raw).endsWith("\n").doesNotContain("\r");
-        assertThat(raw.chars().filter(c -> c == '\n').count()).isEqualTo(1);
+        assertThat(stdout).endsWith("\n").doesNotContain("\r");
+        assertThat(stdout.chars().filter(c -> c == '\n').count()).isEqualTo(1);
     }
 
     /** Catches: a garbled line killing the run instead of being skipped. */
     @Test
     void unparseableLineIsSkippedAndTheLoopCarriesOn() throws Exception {
-        List<String> out = lines("this is not json", INIT);
+        List<String> replies = replyLinesFor("this is not json", INIT);
 
-        assertThat(out).hasSize(1);
+        assertThat(replies).hasSize(1);
     }
 
-    private String raw(String... inputLines) throws IOException {
-        StringWriter out = new StringWriter();
-        PrintStream quiet = new PrintStream(OutputStream.nullOutputStream());
-        new MaelstromClient(new StringReader(String.join("\n", inputLines)), out, quiet, new Node()).run();
-        return out.toString();
+    /**
+     * Runs a whole node against the given lines and returns everything it wrote.
+     *
+     * String... means "any number of strings": the test passes one line or
+     * several, and they are joined with newlines into one block of fake stdin.
+     * The client stops when the StringReader runs out, exactly as it stops when
+     * Maelstrom closes the real pipe.
+     */
+    private String rawStdoutFor(String... stdinLines) throws IOException {
+        StringReader fakeStdin = new StringReader(String.join("\n", stdinLines));
+        StringWriter fakeStdout = new StringWriter();
+        PrintStream quietLog = new PrintStream(OutputStream.nullOutputStream());
+
+        new MaelstromClient(fakeStdin, fakeStdout, quietLog, new Node()).run();
+
+        return fakeStdout.toString();
     }
 
-    private List<String> lines(String... inputLines) throws IOException {
-        return raw(inputLines).lines().toList();
+    /** The same output, split into one entry per reply line. */
+    private List<String> replyLinesFor(String... stdinLines) throws IOException {
+        return rawStdoutFor(stdinLines).lines().toList();
     }
 }

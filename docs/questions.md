@@ -358,3 +358,36 @@ One real gotcha found while setting it up: git had `gradlew` recorded as mode
 100644, with no execute bit, because Windows has no such bit. On the Linux runner
 `./gradlew` would have failed with "Permission denied". Fixed with
 `git update-index --chmod=+x gradlew`. Same lesson as Maelstrom's launcher script.
+
+## Is Blackhole.consume there so the JIT cannot delete the work?
+
+Yes. A benchmark whose result is never used is dead code, and the JIT deletes
+dead code, leaving an empty loop that reports a fabulous number.
+`Blackhole.consume` is a sink the JVM cannot see through, so the parse counts as
+used and has to actually happen.
+
+Shortcut worth knowing: returning the value from the `@Benchmark` method does the
+same thing, because JMH consumes whatever is returned. `Blackhole` is for when
+there are several results, or no natural single return value.
+
+## In the test, where does the output list come from?
+
+From a helper method at the bottom of the test file, not from the input. The
+names were confusing, so they are now `rawStdoutFor` and `replyLinesFor`.
+
+```
+INIT, a JSON string
+  -> String.join("\n", lines)      one block of fake stdin
+  -> new StringReader(...)         pretends to be the stdin pipe
+  -> client.run()                  reads until the string runs out
+  -> StringWriter                  pretends to be stdout, captures everything
+  -> .toString()                   the raw text written
+  -> .lines().toList()             List<String>, one entry per reply line
+```
+
+`String...` is varargs: "any number of strings", so `replyLinesFor(INIT)` passes
+one line and `replyLinesFor(INIT, echo)` passes two.
+
+The client stops when the StringReader runs out, exactly as it stops when
+Maelstrom closes the real pipe: `readLine()` returns null either way. That is the
+payoff of taking a `Reader` and a `Writer` instead of using System.in directly.
