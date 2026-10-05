@@ -5,6 +5,9 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
+ * IN ONE LINE: the brain of one node. It holds what this node knows (its name,
+ * its peers, its message counter) and decides what to answer.
+ *
  * The logic behind the receptionist. In milestone 0.3 it echoes; in Phase 1 the
  * storage engine moves in here, and in Phase 3, Raft.
  *

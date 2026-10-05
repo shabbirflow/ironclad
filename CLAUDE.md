@@ -64,6 +64,8 @@ Never skip 4. If I choose badly, say so plainly — then build my choice
 if I still want it.
 
 ## While coding
+- Start every file with a one-line plain-English comment saying what it is
+  for, before any other detail.
 - Stop every 50 lines and explain.
 - After each block: which invariant it holds, and what breaks if it's wrong.
 - Test first. Explain what failure the test catches.

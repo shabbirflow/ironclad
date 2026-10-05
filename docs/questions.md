@@ -221,3 +221,80 @@ Monkey is Body. Capuchin/Howler/Mandrill are Init/Echo/Error. feed() is the
 message handler. In Phase 3, adding RequestVote will march me to every place that
 handles messages. An enum cannot do this: enums are a fixed set of values, all
 the same shape; a sealed interface is a fixed set of shapes with their own fields.
+
+## What is Node, and is it the database server or a Maelstrom client?
+
+Node is the **brain of one node**: what this participant knows (its name, its
+peers, its msg_id counter) and what it decides to answer. Right now all it knows
+is how to echo. In Phase 1 the memtable, WAL and SSTables move in here; in Phase
+3, the Raft state.
+
+The split is deliberate:
+- `MaelstromClient` = mouth and ears. Speaks the protocol. Knows no databases.
+- `Node` = brain. Decides answers. Knows nothing about pipes or JSON.
+
+That line is why Phase 3 can swap the mouth for TCP sockets without touching the
+brain.
+
+## Does every node have its own MaelstromClient?
+
+Yes. One node = one OS process = one JVM = one `Main` = one `MaelstromClient`
+plus one `Node`. Five nodes means five of each, with five separate memories.
+Nothing is shared; Maelstrom is the only thing passing messages between them.
+
+## What does `yield` do?
+
+It supplies the value of a `switch` branch when that branch is a block with
+several statements. A single-expression arrow branch needs no `yield`.
+
+```java
+int x = switch (day) {
+    case MON -> 1;                                  // expression: no yield
+    case TUE -> { log("tuesday"); yield 2; }        // block: must yield a value
+};
+```
+`return` would leave the whole method; `yield` only produces the switch's value.
+In `Node.handle` the init branch is a block (store nodeId, store nodeIds, then
+answer), so it ends in `yield`.
+
+## What is an ObjectMapper?
+
+Jackson's translator between Java objects and JSON text. Two methods in use:
+- `readValue(text, Message.class)`: JSON text -> Java object
+- `writeValueAsString(object)`: Java object -> JSON text
+
+The builder settings only tune how it translates: snake_case field names,
+leave out null fields, do not throw on unknown fields, no pretty-printing.
+
+## `mapper.readValue(line, Message.class)` — is that string to JSON?
+
+The other way round. The line **already is** JSON: a string of JSON text that
+arrived on stdin. `readValue` parses that text into a Java object graph, a
+`Message` holding a `Body`. Writing goes back the other way.
+
+## What is Optional?
+
+A box holding either one value or nothing. The alternative is returning `null`,
+which compiles fine and then throws NullPointerException somewhere else at 2 a.m.
+`Optional<Body>` says in the type system: there may be no reply.
+
+- `reply.isPresent()` -> is there anything in the box?
+- `reply.get()` -> take it out
+
+`init` and `echo` need replies. `echo_ok` does not, so `handle` returns
+`Optional.empty()` for it.
+
+## The four lines in run(), with real values
+
+```
+line    = {"src":"c2","dest":"n1","body":{"type":"echo","msg_id":7,"echo":"hi"}}
+request = Message[src=c2, dest=n1, body=Echo[msgId=7, echo=hi]]
+reply   = Optional[EchoOk[msgId=1, inReplyTo=7, echo=hi]]
+request.replyWith(reply.get())
+        = Message[src=n1, dest=c2, body=EchoOk[msgId=1, inReplyTo=7, echo=hi]]
+send(...) writes
+  {"src":"n1","dest":"c2","body":{"type":"echo_ok","msg_id":1,"in_reply_to":7,"echo":"hi"}}
+followed by '\n', then flush.
+```
+In `send(Message message)`, `message` is the parameter: the reply built on the
+line above.

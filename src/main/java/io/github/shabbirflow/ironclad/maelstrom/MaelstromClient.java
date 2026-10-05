@@ -15,6 +15,9 @@ import java.io.Writer;
 import java.util.Optional;
 
 /**
+ * IN ONE LINE: the mouth and ears of a node. It speaks Maelstrom's protocol of
+ * JSON lines on stdin and stdout, and knows nothing about databases.
+ *
  * The receptionist. Reads one line, turns it into a Message, asks the Node what
  * to answer, writes one line back. It knows nothing about databases.
  *

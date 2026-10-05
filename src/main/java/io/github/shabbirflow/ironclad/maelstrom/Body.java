@@ -6,6 +6,8 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import java.util.List;
 
 /**
+ * IN ONE LINE: every message type we understand, one record each.
+ *
  * One Maelstrom message body. Its shape depends entirely on "type", so each
  * type is its own record and Jackson chooses which one to build from that field.
  *

@@ -9,6 +9,9 @@ import java.io.OutputStreamWriter;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
+ * IN ONE LINE: the program's entry point. It connects the real stdin and stdout
+ * to the client, and starts the loop.
+ *
  * Wires the client to the real pipes. UTF-8 is stated explicitly rather than
  * left to the platform default, because JSON is UTF-8 and a Windows default of
  * windows-1252 would mangle any non-ASCII payload.
