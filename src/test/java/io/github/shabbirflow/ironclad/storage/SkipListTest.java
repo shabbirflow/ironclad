@@ -7,10 +7,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Random;
 import java.util.TreeMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 /**
  * IN ONE LINE: proves the skip list behaves exactly like a TreeMap, including
@@ -171,5 +173,31 @@ class SkipListTest {
 
         assertThat(ours).isEqualTo(theirs);
         assertThat(oracle.entrySet().stream().map(Map.Entry::getValue).toList()).hasSize(oracle.size());
+    }
+
+    /** Catches: a plain for-each loop missing entries, or visiting them out of order. */
+    @Test
+    void worksInAPlainForEachLoop() {
+        SkipList list = new SkipList();
+        for (String key : List.of("delta", "alpha", "charlie", "bravo")) {
+            list.put(b(key), b(key.toUpperCase()));
+        }
+
+        List<String> seen = new ArrayList<>();
+        for (SkipList.Entry entry : list) {          // no lambda in sight
+            seen.add(s(entry.key()) + "=" + s(entry.value()));
+        }
+
+        assertThat(seen).containsExactly("alpha=ALPHA", "bravo=BRAVO", "charlie=CHARLIE", "delta=DELTA");
+    }
+
+    /** Catches: an iterator that runs off the end quietly instead of saying so. */
+    @Test
+    void iteratorOnAnEmptyListHasNothing() {
+        SkipList list = new SkipList();
+
+        assertThat(list.iterator().hasNext()).isFalse();
+        assertThatExceptionOfType(NoSuchElementException.class)
+                .isThrownBy(() -> list.iterator().next());
     }
 }

@@ -1,8 +1,9 @@
 package io.github.shabbirflow.ironclad.storage;
 
 import java.util.Arrays;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
 import java.util.Random;
-import java.util.function.Consumer;
 
 /**
  * IN ONE LINE: a sorted map from byte[] keys to byte[] values, built from linked
@@ -15,7 +16,7 @@ import java.util.function.Consumer;
  * Invariant: walking lane 0 from the head visits every live key exactly once, in
  * ascending unsigned byte order.
  */
-public final class SkipList {
+public final class SkipList implements Iterable<SkipList.Entry> {
 
     /**
      * A node reaching every lane would need 12 pointers; at p = 1/2 that supports
@@ -167,12 +168,32 @@ public final class SkipList {
     }
 
     /**
-     * Visits every entry in ascending key order, which is lane 0 end to end.
-     * This walk is what a flush writes to disk, in one sweep, with no sorting.
+     * Walks lane 0 from the first key to the last, which is every entry in
+     * ascending order. This walk is what a flush writes to disk: one sweep, no
+     * sorting step.
+     *
+     * Implementing Iterable means callers write an ordinary for-each loop, and
+     * milestone 1.8 needs a real Iterator anyway to merge several of these.
      */
-    public void forEach(Consumer<Entry> action) {
-        for (Node node = head.next[0]; node != null; node = node.next[0]) {
-            action.accept(new Entry(node.key, node.value));
-        }
+    @Override
+    public Iterator<Entry> iterator() {
+        return new Iterator<>() {
+            private Node next = head.next[0];
+
+            @Override
+            public boolean hasNext() {
+                return next != null;
+            }
+
+            @Override
+            public Entry next() {
+                if (next == null) {
+                    throw new NoSuchElementException();
+                }
+                Entry entry = new Entry(next.key, next.value);
+                next = next.next[0];
+                return entry;
+            }
+        };
     }
 }

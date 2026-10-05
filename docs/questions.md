@@ -465,3 +465,46 @@ rewriting the page.
 
 The idea behind all of it: optimise **two** of {write cost, read cost, space},
 never all three. LSM buys cheap writes and pays in read cost and space.
+
+## Why does an injectable Random mean a failing test can be "replayed"?
+
+`new Random()` seeds itself from the clock, so every run produces different
+numbers. In a skip list that means different node heights, so a **different
+shape** every run.
+
+Now suppose a bug only shows up for one particular shape. With clock seeding the
+test fails maybe once in fifty runs, and when you rerun it to investigate, the
+shape is different and it passes. That is a flaky test, and it is almost
+impossible to debug.
+
+`new Random(7L)` produces the **same sequence of numbers every time**, so the
+same heights, the same shape, the same operations. The test either always passes
+or always fails. "Replay" just means: run it again and get the identical
+scenario, including in a debugger.
+
+Like a shuffled deck. If you want to study one freak bridge hand, you need the
+shuffle to be repeatable, not a fresh shuffle each time.
+
+The large random test seeds two of them: one for the operation sequence, one for
+the node heights.
+
+## What was Consumer/action doing in forEach, and what is it now?
+
+It was a for loop over lane 0, nothing more. Every key lives in lane 0, so
+walking `head.next[0]` to the end visits everything in order.
+
+`Consumer<Entry>` only meant "a function taking an Entry and returning nothing",
+and `action.accept(entry)` called it. The loop lived in the list; the caller
+passed in what to do with each entry, which forced callers to write lambdas.
+
+Replaced with `implements Iterable<Entry>`, so iteration is an ordinary loop:
+
+```java
+for (SkipList.Entry entry : list) {
+    out.write(entry.key());
+}
+```
+
+`Iterable` also provides `forEach` for free, so the lambda style still works for
+anyone who prefers it. Milestone 1.8 needs a real `Iterator` regardless, to merge
+several sorted sources.
