@@ -767,3 +767,25 @@ byte[] and text is converted at the edge.
 The charset is named explicitly for the same reason as in Main: a Windows default
 of windows-1252 stores "e-acute" in one byte where UTF-8 uses two, so the key
 length and therefore the bytes on disk would differ between machines.
+
+## The header indices: what is at 0, 1 and 4?
+
+Byte indices, not field numbers, and `putInt` writes four bytes because an int is
+four bytes.
+
+```
+index:  0  1  2  3 | 4  5  6  7 | 8     9     10..16   17     18..24
+        \--crc32c--/ \--length--/ kind  keyLen  key    valLen  value
+                                  \------------ payload -------/
+```
+
+For key "user:42" (7 bytes) and value "shabbir" (7 bytes), payloadBytes = 17 and
+the record is 25 bytes on disk.
+
+- `buffer.putInt(4, payloadBytes)` writes four bytes at indices 4..7, the length
+  field, storing 17.
+- `buffer.putInt(0, crc)` writes four bytes at indices 0..3, the crc field.
+- `crc.update(buffer.array(), 4, 4 + payloadBytes)` is
+  `update(array, offset, length)`: **start** at byte 4, hash **21 bytes**, which
+  covers bytes 4..24, the length field plus the payload. The two numbers look
+  alike but one is an offset and the other is a count.

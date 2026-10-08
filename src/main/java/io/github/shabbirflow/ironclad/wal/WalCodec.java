@@ -13,6 +13,12 @@ import java.util.zip.CRC32C;
  *   [ crc32c : 4 ][ length : 4 ][ payload : length bytes ]
  *     the crc covers the length field AND the payload
  *
+ * By byte index, for a 7-byte key and a 7-byte value:
+ *
+ *   0  1  2  3 | 4  5  6  7 | 8     9     10..16    17      18..24
+ *   \--crc32c-/ \--length--/ kind  keyLen  key     valLen   value
+ *                            \------------ payload ---------/
+ *
  *   payload = [ kind : 1 ][ keyLength : varint ][ key ][ valueLength : varint ][ value ]
  *             kind 1 = put, kind 2 = delete, which stops after the key
  *
@@ -70,10 +76,14 @@ public final class WalCodec {
 
         // Absolute puts, so filling in the header does not disturb the position
         // the payload was written with.
-        buffer.putInt(4, payloadBytes);
+        buffer.putInt(4, payloadBytes);          // 4 bytes at indices 4..7: the length field
+
+        // update(array, offset, LENGTH): start at byte 4 and hash (4 + payloadBytes)
+        // bytes, which is the length field plus the whole payload. The second
+        // argument is an offset, the third is a count, despite looking alike.
         CRC32C crc = new CRC32C();
-        crc.update(buffer.array(), 4, 4 + payloadBytes);    // length field included
-        buffer.putInt(0, (int) crc.getValue());
+        crc.update(buffer.array(), 4, 4 + payloadBytes);
+        buffer.putInt(0, (int) crc.getValue());  // 4 bytes at indices 0..3: the crc field
 
         return buffer.position(0).limit(HEADER_BYTES + payloadBytes);
     }
