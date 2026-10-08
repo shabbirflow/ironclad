@@ -719,10 +719,15 @@ The small end. Lab: https://claude.ai/artifact/AtaKudd6Pxbh2Ak4VZie1J
 on disk: AC 9E 04                 =  44, 30, 4     low group leads
 ```
 
-This is the opposite direction from the big-endian `length` field, on purpose:
-the number of bytes a varint needs is only known after consuming its low bits, so
-the low end has to lead. Protobuf, SQLite and LevelDB all do the same. One record
+This is the opposite direction from the big-endian `length` field. One record
 carries both byte orders, which is why a format must state its conventions.
+
+**Correction:** I first said the low end "has to" lead, and that SQLite does the
+same. Both wrong. Protobuf and LevelDB put the low group first; **SQLite and MIDI
+put the high group first**, and ASN.1 too. High-first works fine as long as the
+encoder knows the byte count before writing the first byte, which ours already
+computes for sizing. The real trade is: low-first needs no pre-pass to encode,
+high-first decodes with `result = (result << 7) | group` and no shift counter.
 
 ## Does decode move byte by byte past a corrupt record?
 
