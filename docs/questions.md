@@ -572,3 +572,140 @@ That is the difference between the two: the log holds operations, the memtable
 holds state. A prefix of operations always produces a state that really existed.
 A subset with a hole in it produces a state that never existed, which is why r57
 goes even when its bytes are fine.
+
+## Do we replay the log from first to last? And does that take time?
+
+Yes, in append order, because order is the meaning. `put a=1` then `put a=2`
+ends with a=2; replayed backwards it ends with a=1, which is a state that never
+existed.
+
+Recovery time is proportional to log size, which is why the log is **bounded**:
+once the memtable is flushed to an SSTable, the log records it covers are safe on
+disk in sorted form, and that part of the log is deleted. So the log only ever
+holds unflushed writes, around one memtable's worth (64 MB), and reading it is a
+sequential scan at hundreds of MB/s. Milestone 1.9 measures recovery time against
+WAL size for exactly this reason.
+
+## What was the claimed advantage of option B, and what do we checksum?
+
+We checksum **the 4 length bytes plus the payload bytes** (not the CRC field
+itself, which would be circular).
+
+The claim was that including the length detects corruption of the header, where
+option A (payload only) would not. Mutating the code to option A left all 10
+tests passing, because a corrupted length makes the decoder hash the **wrong
+range of bytes**, so the checksum fails anyway. So header corruption is caught
+either way; B only makes it direct rather than incidental. Marginal, kept because
+it costs nothing. LevelDB checksums only its type and data.
+
+## Does Delete change the kind in the payload?
+
+Yes. The payload starts with a kind byte: 1 for put, 2 for delete. A delete
+record has kind 2 and **no value section at all** - it stops after the key.
+
+That is different from a put with an empty value, which has kind 1 and a value
+length of 0. Both exist and must stay distinguishable.
+
+## "Every truncation from 0 bytes up to one short of complete is Incomplete"
+
+The test encodes one record (say 20 bytes), then tries to decode only the first
+0 bytes, then the first 1, then 2, up to 19. Every one must come back
+`Incomplete`, never `Corrupt` and never `Ok`.
+
+Why: a crash can stop a write at **any** byte, so every possible cut has to be
+recognised as unfinished rather than damaged. Under 8 bytes there is not even a
+full header to read; past that the length is known but the payload is short.
+
+## Why must decode not move the buffer's position?
+
+A `ByteBuffer` carries a position, a cursor. Relative reads like `getInt()`
+advance it; absolute reads like `getInt(4)` do not. `decode` uses absolute reads
+only.
+
+The replay loop owns that cursor and advances it **only on success**, by
+`bytesConsumed`. If `decode` consumed bytes and then failed, the cursor would be
+left somewhere inside a torn record, and the next read would start at a garbage
+offset - possibly finding a plausible-looking record inside the wreckage of a
+real one. Leaving the position untouched means a failure leaves the reader
+exactly where it was, so truncation happens at the right offset.
+
+## "Sealed, so the switch is checked by the compiler" - what does that mean here?
+
+Not that a Put turns into a Delete. It means: add a **third** kind of record
+later (a transaction marker, say) and every exhaustive switch over `WalRecord`
+stops compiling until it is handled.
+
+Fair challenge, though: the encoder was using `instanceof`, which gets no such
+check, so the comment was overstating things. Changed to an exhaustive switch:
+
+```java
+byte[] value = switch (record) {
+    case WalRecord.Put put -> put.value();
+    case WalRecord.Delete delete -> null;
+};
+```
+
+Now the claim is true.
+
+## Is big-endian left to right, lowest address first?
+
+Yes. Most significant byte first, at the lowest address. `0x12345678` is stored
+`12 34 56 78`. Little-endian stores it `78 56 34 12`.
+
+Why big-endian on disk: it is network byte order, it reads naturally in a hex
+dump, and byte-by-byte comparison of two big-endian numbers gives the same answer
+as comparing the numbers - useful when keys are sorted bytewise. x86 is
+little-endian internally, which is exactly why a file format must state its
+choice rather than inherit one. `ByteBuffer` already defaults to big-endian.
+
+## Is 16 * 1024 * 1024 just 16 MB? And what does a private constructor do?
+
+Yes, 16,777,216 bytes. Written as a product so the intent is readable.
+
+`WalCodec` is a utility class: only static methods, no state. The private
+constructor means **nothing outside the class can create an instance**, and
+nothing inside does either. `new WalCodec()` would be a meaningless object, so
+the private constructor documents and enforces that. `final` separately blocks
+subclassing.
+
+## What does varintBytes do, and how does the payload size add up?
+
+`varintBytes` **counts** how many bytes the varint form of a number will need. It
+writes nothing. We need the count up front to size the buffer.
+
+The arithmetic adds both the length fields and the data:
+
+```java
+int payloadBytes = 1                              // kind byte
+    + varintBytes(key.length)                     // size of the key-length field
+    + key.length                                  // the key bytes
+    + (value == null ? 0                          // delete: nothing more
+        : varintBytes(value.length) + value.length);  // value length field + bytes
+```
+
+For key "user:42" (7 bytes) and value "shabbir" (7 bytes):
+1 + 1 + 7 + (1 + 7) = 17 payload bytes, plus the 8-byte header = 25 on disk.
+
+## How does the varint bit arithmetic work?
+
+`0x7F` is `0111 1111`, the low seven bits. `~0x7F` is every bit **above** those.
+
+- `(value & ~0x7F) != 0` asks "are there bits higher than seven, so more bytes
+  needed?"
+- `(value & 0x7F) | 0x80` takes the low seven bits and sets the top bit as a
+  continuation flag: "another byte follows".
+- `value >>>= 7` throws away the seven bits just written. `>>>` is the unsigned
+  shift, so a negative number does not keep sign-filling ones from the left.
+
+Encoding 300:
+```
+300            = 1 0010 1100
+300 & 0x7F     = 010 1100 = 44     -> write 44 | 0x80 = 0xAC   (more follows)
+300 >>> 7      = 2                 -> no high bits left
+                                   -> write 0x02               (last byte)
+result: AC 02
+```
+Decoding reverses it: 0xAC has the top bit set, so take 44 at shift 0; 0x02 does
+not, so take 2 at shift 7, giving 44 + 256 = 300. Stop.
+
+Ranges: 1 byte holds 0 to 127, 2 bytes to 16,383, 3 to 2,097,151.

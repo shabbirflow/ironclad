@@ -48,7 +48,12 @@ public final class WalCodec {
     /** The complete on-disk record, header included, ready to append. */
     public static ByteBuffer encode(WalRecord record) {
         byte[] key = record.key();
-        byte[] value = record instanceof WalRecord.Put put ? put.value() : null;
+        // An exhaustive switch over the sealed interface, not an instanceof check:
+        // add a third kind of record and this stops compiling until it is handled.
+        byte[] value = switch (record) {
+            case WalRecord.Put put -> put.value();
+            case WalRecord.Delete delete -> null;
+        };
 
         int payloadBytes = 1 + varintBytes(key.length) + key.length
                 + (value == null ? 0 : varintBytes(value.length) + value.length);
@@ -133,6 +138,11 @@ public final class WalCodec {
     // Lengths are usually small. A 20-byte key spends one byte on its length this
     // way and four bytes with a fixed int, and the WAL is the file we write most.
 
+    /**
+     * Counts how many bytes the varint form of this number will take: 1 byte for
+     * 0 to 127, 2 for 128 to 16383, 3 up to about 2 million. It counts and writes
+     * nothing, because the buffer has to be sized before anything goes into it.
+     */
     static int varintBytes(int value) {
         int bytes = 1;
         while ((value & ~0x7F) != 0) {
@@ -142,6 +152,14 @@ public final class WalCodec {
         return bytes;
     }
 
+    /**
+     * Writes the number as a varint: seven bits of it per byte, lowest seven
+     * first, with the top bit of each byte set to mean "another byte follows" and
+     * clear on the last one.
+     *
+     * 300 becomes two bytes, 0xAC 0x02, because 300 = 44 + (2 << 7): 44 in the
+     * first byte with the continuation flag, then 2.
+     */
     static void putVarint(ByteBuffer buffer, int value) {
         while ((value & ~0x7F) != 0) {
             buffer.put((byte) ((value & 0x7F) | 0x80));      // seven bits, continuation set
@@ -150,7 +168,13 @@ public final class WalCodec {
         buffer.put((byte) value);
     }
 
-    /** Returns -1 when the encoding never terminates within five bytes. */
+    /**
+     * Reads a varint back: take seven bits from each byte, shifting each new
+     * group further left, and stop at the first byte whose top bit is clear.
+     *
+     * Returns -1 if five bytes go by without one, which means these bytes are not
+     * a varint at all. Five is the limit because an int is 32 bits and 5 x 7 = 35.
+     */
     static int getVarint(ByteBuffer buffer) {
         int result = 0;
         for (int shift = 0; shift <= 28; shift += 7) {
