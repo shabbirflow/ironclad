@@ -844,3 +844,27 @@ its header did.
 bytes were stored, so both sides are narrowed to `int` the same way. The bit
 patterns match even though the signed interpretation might be negative.
 
+
+## Does a new ByteBuffer start at position 0?
+
+Yes. `allocate(n)` gives position 0, limit = capacity = n, and zero-filled bytes.
+`wrap(array)` likewise: position 0, limit = array length.
+
+The cursor through `encode`, for a 7-byte key and 7-byte value:
+
+```
+allocate(25)      pos=0   lim=25     fresh, all zeros
+position(8)       pos=8              skip past the header
+put(kind)         pos=9
+putVarint(7)      pos=10             key length
+put(key)          pos=17
+putVarint(7)      pos=18             value length
+put(value)        pos=25             full
+putInt(4, len)    pos=25  <-         absolute: bytes 4..7, cursor unmoved
+putInt(0, crc)    pos=25  <-         absolute: bytes 0..3, cursor unmoved
+flip()            pos=0   lim=25     readable from the start
+```
+
+Which shows why the header is written last: a checksum cannot cover bytes that do
+not exist yet. And it is why absolute puts are needed, since with relative puts
+the header would land at position 25, past the end.
