@@ -868,3 +868,29 @@ flip()            pos=0   lim=25     readable from the start
 Which shows why the header is written last: a checksum cannot cover bytes that do
 not exist yet. And it is why absolute puts are needed, since with relative puts
 the header would land at position 25, past the end.
+
+## What does the CI actually do, and why bother?
+
+Mechanically: on every push, GitHub starts a **fresh Ubuntu machine**, clones the
+repo, installs JDK 21, runs `./gradlew test` and `jmhClasses`, and marks the
+commit pass or fail. About a minute, free for public repos.
+
+Three reasons it earns its place:
+
+1. **It answers "does this work on a machine that is not mine?"** My laptop has a
+   JDK at a known path, a warm Gradle daemon, Windows line endings, IntelliJ
+   settings. A clean Linux box has none of that. It already caught one real
+   failure: git had `gradlew` without the execute bit, so `./gradlew` on Linux
+   would have failed with "Permission denied" for anyone who cloned the repo.
+2. **It catches regressions once the project is too big to re-run by hand.** In
+   Phase 3, a Raft change that breaks a milestone 1.1 ordering test gets flagged a
+   minute after the push instead of weeks later.
+3. **Credibility.** A green badge says the tests exist and pass from a clean
+   checkout. Plenty of GitHub projects do not even compile for a stranger.
+
+What it deliberately skips: Maelstrom runs (an install, minutes per run) and
+benchmark *execution* (shared runners have noisy neighbours, so the numbers would
+be fiction). It compiles benchmarks so a broken one still fails fast.
+
+Could a solo project skip CI? Yes, but it cost 20 minutes to add, gets expensive
+to retrofit, and is the cheapest credibility in the project.
