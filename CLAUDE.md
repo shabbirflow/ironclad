@@ -49,6 +49,13 @@ I do not need to understand a tool completely before we start using it. Prefer
 learning while building over finishing a tutorial first. If a lesson is growing
 past what the next step needs, cut it and move on.
 
+## Naming
+
+Plain, descriptive names. The project is called Ironclad, but themed names for
+classes and methods make the code harder for me to read, which is the opposite of
+the point. An iron or naval flavour is fine only as a prefix or suffix that keeps
+the real word intact (`forgeEncode`), and only where it costs no clarity.
+
 ## Deferred work
 
 When we knowingly choose a simpler option for now, record it in

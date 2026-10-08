@@ -22,6 +22,9 @@ import java.util.zip.CRC32C;
  *   payload = [ kind : 1 ][ keyLength : varint ][ key ][ valueLength : varint ][ value ]
  *             kind 1 = put, kind 2 = delete, which stops after the key
  *
+ * Varints here are high-group-first, matching the big-endian fixed fields, so the
+ * whole record reads most significant first in one direction.
+ *
  * Why a checksum and not just the length: if the power died halfway through
  * writing the payload, the length field still reads perfectly and you would
  * deserialise garbage with complete confidence. Only a checksum over the content
@@ -163,38 +166,48 @@ public final class WalCodec {
     }
 
     /**
-     * Writes the number as a varint: seven bits of it per byte, lowest seven
-     * first, with the top bit of each byte set to mean "another byte follows" and
-     * clear on the last one.
+     * Writes the number as a varint, highest seven bits first, so it reads left to
+     * right like every other field in the record. The top bit of each byte means
+     * "another byte follows", and is clear on the last one.
      *
-     * 300 becomes two bytes, 0xAC 0x02, because 300 = 44 + (2 << 7): 44 in the
-     * first byte with the continuation flag, then 2.
+     * 300 becomes 0x82 0x2C: group 2 with the continuation flag, then group 44.
+     * Reading those groups left to right gives (2 << 7) + 44 = 300.
+     *
+     * High-first needs the byte count before the first byte can be written, which
+     * is why varintBytes exists as its own function. Protobuf and LevelDB do the
+     * reverse; SQLite, MIDI and ASN.1 do it this way.
      */
     static void putVarint(ByteBuffer buffer, int value) {
-        while ((value & ~0x7F) != 0) {
-            buffer.put((byte) ((value & 0x7F) | 0x80));      // seven bits, continuation set
-            value >>>= 7;
+        int groups = varintBytes(value);
+        for (int group = groups - 1; group >= 0; group--) {
+            int sevenBits = (value >>> (7 * group)) & 0x7F;
+            buffer.put((byte) (group == 0 ? sevenBits : sevenBits | 0x80));
         }
-        buffer.put((byte) value);
     }
 
     /**
-     * Reads a varint back: take seven bits from each byte, shifting each new
-     * group further left, and stop at the first byte whose top bit is clear.
+     * Reads a varint back: shift what we have seven bits left, drop the next
+     * group into the gap, and stop at the first byte whose top bit is clear. No
+     * shift counter needed, because the groups arrive most significant first.
      *
-     * Returns -1 if five bytes go by without one, which means these bytes are not
-     * a varint at all. Five is the limit because an int is 32 bits and 5 x 7 = 35.
+     * Returns -1 when the bytes are not a varint: no terminating byte within five
+     * (an int is 32 bits and 5 x 7 = 35), or a value too large for an int.
+     * Accumulating in a long makes that second check possible, since the overflow
+     * would otherwise be silent.
      */
     static int getVarint(ByteBuffer buffer) {
-        int result = 0;
-        for (int shift = 0; shift <= 28; shift += 7) {
+        long result = 0;
+        for (int bytesRead = 0; bytesRead < 5; bytesRead++) {
             if (!buffer.hasRemaining()) {
                 return -1;
             }
             byte b = buffer.get();
-            result |= (b & 0x7F) << shift;
+            result = (result << 7) | (b & 0x7F);
+            if (result > Integer.MAX_VALUE) {
+                return -1;
+            }
             if ((b & 0x80) == 0) {
-                return result;
+                return (int) result;
             }
         }
         return -1;

@@ -710,24 +710,30 @@ not, so take 2 at shift 7, giving 44 + 256 = 300. Stop.
 
 Ranges: 1 byte holds 0 to 127, 2 bytes to 16,383, 3 to 2,097,151.
 
-## Varint order: for 69420, which end goes first?
+## Varint order: which end goes first?
 
-The small end. Lab: https://claude.ai/artifact/AtaKudd6Pxbh2Ak4VZie1J
+**Ironclad now writes the high group first**, so a varint reads left to right like
+the big-endian `crc32c` and `length` fields. One record, one direction.
 
 ```
 69420 = 4*16384 + 30*128 + 44     base-128 digits, high to low: 4, 30, 44
-on disk: AC 9E 04                 =  44, 30, 4     low group leads
+on disk: 84 9E 2C                 =  4, 30, 44     high group leads
 ```
 
-This is the opposite direction from the big-endian `length` field. One record
-carries both byte orders, which is why a format must state its conventions.
+Encoding: ask `varintBytes` how many groups there are, then emit them from the
+top, setting the continuation bit on all but the last.
+Decoding: `result = (result << 7) | group`, stopping at the first byte whose top
+bit is clear. No shift counter needed.
 
-**Correction:** I first said the low end "has to" lead, and that SQLite does the
-same. Both wrong. Protobuf and LevelDB put the low group first; **SQLite and MIDI
-put the high group first**, and ASN.1 too. High-first works fine as long as the
-encoder knows the byte count before writing the first byte, which ours already
-computes for sizing. The real trade is: low-first needs no pre-pass to encode,
-high-first decodes with `result = (result << 7) | group` and no shift counter.
+It was originally low-group-first, which is what Protobuf, LevelDB and RocksDB
+do, and which needs no pre-pass to encode. We switched because the byte count was
+already being computed to size the buffer, so high-first costs nothing and the
+record stops carrying two byte orders. SQLite, MIDI and ASN.1 are high-first too.
+
+Earlier I claimed the low end "has to" lead and that SQLite agreed. Both wrong.
+
+`getVarint` accumulates into a `long` so that a value too large for an `int` can
+be rejected; in an `int` that overflow would be silent.
 
 ## Does decode move byte by byte past a corrupt record?
 

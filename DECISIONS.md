@@ -248,3 +248,35 @@ can tell the two apart.
 flipped payload bit, a flipped length bit, an impossible length, every truncation
 from 0 bytes to one short of complete (each must be Incomplete, not Corrupt), and
 reading three records back to back from one buffer.
+
+## 2026-10-08 — Varints write the high group first
+
+**Changed.** `putVarint` and `getVarint` now put the most significant seven-bit
+group first, so the whole record reads most significant first: the big-endian
+`crc32c` and `length` fields and the varints all agree on direction.
+
+**Why.** The record previously carried two byte orders, which is a thing a reader
+has to remember rather than derive. High-first needs the group count before the
+first byte can be written, and we were already computing exactly that to size the
+buffer, so it costs nothing. Decoding also loses its shift counter:
+`result = (result << 7) | group`.
+
+**What it is not.** Not a correctness fix. Low-group-first is what Protobuf,
+LevelDB and RocksDB use and it is perfectly sound; SQLite, MIDI and ASN.1 are
+high-first. Nothing outside this repo reads our files, so internal consistency
+wins over matching LevelDB's convention. Free to do now because nothing is on
+disk yet; after milestone 1.3 it would be a format migration.
+
+**Correction to the record.** I had claimed the low group "has to" lead because
+the byte count is unknowable up front, and that SQLite agreed. Both wrong.
+
+**Pinned with a test.** `varintsPutTheHighGroupFirst` asserts the exact bytes
+`0x82 0x2C` for 300. Round-trip tests pass under either direction, so without an
+exact-bytes test a future edit could silently flip the order and make every
+existing file unreadable. Two more tests cover every byte boundary from 0 to
+Integer.MAX_VALUE and reject a varint with no terminating byte.
+
+**Also noted.** `encode` returns the buffer with position 0 and limit at the end
+of the record, ready to hand to a channel. The explicit `limit(...)` call is
+redundant, since the buffer was allocated at exactly that size.
+

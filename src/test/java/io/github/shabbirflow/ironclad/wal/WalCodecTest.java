@@ -167,4 +167,46 @@ class WalCodecTest {
 
         assertThat(replayed.toString()).isEqualTo("abc");
     }
+
+    /**
+     * Catches: the varint byte order silently changing. Round-trip tests pass
+     * either way, so the order needs pinning with exact bytes or a future edit
+     * could flip it and make every existing file unreadable.
+     */
+    @Test
+    void varintsPutTheHighGroupFirst() {
+        ByteBuffer buffer = ByteBuffer.allocate(8);
+
+        WalCodec.putVarint(buffer, 300);
+
+        assertThat(java.util.Arrays.copyOf(buffer.array(), buffer.position()))
+                .containsExactly((byte) 0x82, (byte) 0x2C);     // 2 then 44, not 44 then 2
+        assertThat(WalCodec.getVarint(buffer.flip())).isEqualTo(300);
+    }
+
+    /** Catches: arithmetic that breaks exactly at a byte boundary. */
+    @Test
+    void varintsRoundTripAcrossEveryBoundary() {
+        for (int value : new int[] {0, 1, 127, 128, 16_383, 16_384, 69_420, 2_097_151,
+                2_097_152, Integer.MAX_VALUE}) {
+            ByteBuffer buffer = ByteBuffer.allocate(8);
+            WalCodec.putVarint(buffer, value);
+
+            assertThat(buffer.position())
+                    .describedAs("bytes used for %d", value)
+                    .isEqualTo(WalCodec.varintBytes(value));
+            assertThat(WalCodec.getVarint(buffer.flip()))
+                    .describedAs("round trip of %d", value)
+                    .isEqualTo(value);
+        }
+    }
+
+    /** Catches: a runaway loop on bytes that are not a varint at all. */
+    @Test
+    void aVarintWithNoTerminatingByteIsRejected() {
+        ByteBuffer endless = ByteBuffer.wrap(new byte[] {
+                (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF});
+
+        assertThat(WalCodec.getVarint(endless)).isEqualTo(-1);
+    }
 }
