@@ -709,3 +709,61 @@ Decoding reverses it: 0xAC has the top bit set, so take 44 at shift 0; 0x02 does
 not, so take 2 at shift 7, giving 44 + 256 = 300. Stop.
 
 Ranges: 1 byte holds 0 to 127, 2 bytes to 16,383, 3 to 2,097,151.
+
+## Varint order: for 69420, which end goes first?
+
+The small end. Lab: https://claude.ai/artifact/AtaKudd6Pxbh2Ak4VZie1J
+
+```
+69420 = 4*16384 + 30*128 + 44     base-128 digits, high to low: 4, 30, 44
+on disk: AC 9E 04                 =  44, 30, 4     low group leads
+```
+
+This is the opposite direction from the big-endian `length` field, on purpose:
+the number of bytes a varint needs is only known after consuming its low bits, so
+the low end has to lead. Protobuf, SQLite and LevelDB all do the same. One record
+carries both byte orders, which is why a format must state its conventions.
+
+## Does decode move byte by byte past a corrupt record?
+
+No. `decode` never moves the cursor at all; the replay loop advances it only on
+`Ok`, by `bytesConsumed`. On `Corrupt` or `Incomplete` it stops and truncates
+there. No scanning forward for the next plausible record: past a hole there may
+be a perfectly valid record that must not be applied, because the operation
+before it is missing.
+
+## "Sealed, so the switch is checked by the compiler" - concretely
+
+Add a third record kind later:
+
+```java
+record TxnCommit(long txnId) implements WalRecord {}
+```
+
+and the encoder stops compiling: "the switch expression does not cover all
+possible input values". A record kind the writer silently ignores cannot ship.
+Nothing turns a Put into a Delete; the guarantee is about future edits.
+
+Contrast inside the same file: `decode` switches over the `kind` **byte**, and a
+byte is just a number that nothing seals, so that switch needs a `default` and
+gets no help at all.
+
+## Do absolute puts move the buffer cursor?
+
+No. `putInt(4, x)` writes at index 4 and leaves the position alone; `putInt(x)`
+writes at the position and advances it by 4. Same split for `getInt(4)` versus
+`getInt()`. The header is filled in with absolute puts because the payload was
+already written with relative ones, and the checksum cannot be computed until the
+payload exists.
+
+## What does s.getBytes(StandardCharsets.UTF_8) do?
+
+Turns a String into bytes. Java holds strings as UTF-16 in memory; this encodes
+them as UTF-8 bytes, which is what the codec and the files deal in. It is not our
+encoding: UTF-8 is the standard text encoding, and the record format wraps
+whatever bytes come out. It appears only in tests, because the codec's API is
+byte[] and text is converted at the edge.
+
+The charset is named explicitly for the same reason as in Main: a Windows default
+of windows-1252 stores "e-acute" in one byte where UTF-8 uses two, so the key
+length and therefore the bytes on disk would differ between machines.
