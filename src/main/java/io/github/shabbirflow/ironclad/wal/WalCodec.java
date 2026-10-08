@@ -88,7 +88,11 @@ public final class WalCodec {
         crc.update(buffer.array(), 4, 4 + payloadBytes);
         buffer.putInt(0, (int) crc.getValue());  // 4 bytes at indices 0..3: the crc field
 
-        return buffer.position(0).limit(HEADER_BYTES + payloadBytes);
+        // flip(): limit = where writing stopped, position = 0. The buffer turns
+        // from "being filled" into "ready to be read", which is what a channel
+        // write wants. Equivalent to position(0) here, since the buffer was
+        // allocated at exactly this size, but flip says the intent.
+        return buffer.flip();
     }
 
     /**

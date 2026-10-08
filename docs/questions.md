@@ -800,3 +800,47 @@ the record is 25 bytes on disk.
   `update(array, offset, length)`: **start** at byte 4, hash **21 bytes**, which
   covers bytes 4..24, the length field plus the payload. The two numbers look
   alike but one is an offset and the other is a count.
+
+## Would an empty value become a delete?
+
+No, and that is exactly what `emptyKeyAndEmptyValueSurvive` guards.
+
+| | kind byte | value section |
+|---|---|---|
+| `Put(key, new byte[0])` | 1 | present, length 0 |
+| `Delete(key)` | 2 | absent entirely |
+
+The bug it prevents: deciding the kind with something like
+`value == null || value.length == 0`, or treating a value length of 0 during
+decode as "no value here". Either way an empty value would come back as a
+delete, and replay would **remove** the key instead of storing an empty value.
+
+Storing an empty value is legitimate: a key whose presence is the information, a
+JSON empty string, a cleared field. It has to stay distinguishable from a delete.
+
+## What is 16_384 with the underscore?
+
+A Java numeric literal separator, available since Java 7. The compiler ignores
+the underscores: `16_384 == 16384`. It is only for human eyes, like writing
+`1_000_000` or `0xFF_FF_FF_FF`. It cannot lead, trail, or sit beside the decimal
+point.
+
+## Does decode recompute the checksum and compare?
+
+Yes, exactly that:
+
+```java
+CRC32C crc = new CRC32C();
+crc.update(source.slice(start + 4, 4 + length));   // length field + payload
+if ((int) crc.getValue() != expectedCrc) { ... }   // vs the 4 bytes at index 0
+```
+
+Recompute from the bytes actually on disk, compare with the value the writer
+stored in the header. Different means the bytes are not what was written:
+flipped by a failing drive, or a payload that never finished being written while
+its header did.
+
+`getValue()` returns a `long` holding an unsigned 32-bit value, and only four
+bytes were stored, so both sides are narrowed to `int` the same way. The bit
+patterns match even though the signed interpretation might be negative.
+
