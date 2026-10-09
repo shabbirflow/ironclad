@@ -894,3 +894,90 @@ be fiction). It compiles benchmarks so a broken one still fails fast.
 
 Could a solo project skip CI? Yes, but it cost 20 minutes to add, gets expensive
 to retrofit, and is the cheapest credibility in the project.
+
+## Does "kernel buffer space exhausted" mean my RAM runs out?
+
+Not RAM as a whole: the kernel's allowance for **dirty pages**, bytes accepted
+from programs but not yet written to the device. Linux caps it. Copy a 4 GB file
+to a slow USB stick and the progress bar flies to 30% then crawls: the fast part
+filled the page cache, the crawl is the kernel refusing more until the stick
+catches up.
+
+For a regular file on a blocking channel that backpressure makes `write()`
+**block** rather than return a short count. Short writes really come from pipes,
+sockets, non-blocking descriptors, or a signal arriving mid-call. We still loop,
+because `FileChannel.write` only promises "the number of bytes written" and
+relying on behaviour an API does not guarantee is how a bug appears once, in
+production, on a kernel you do not own.
+
+## If Ironclad is distributed, why fail-stop on one node?
+
+Both levels are true at once:
+
+```
+one node's disk fails
+  - that node:    fail-stop. Stops accepting writes. Does not lie.
+  - the cluster:  carries on. Four others hold the data and keep serving.
+```
+
+And Raft **requires** it. Consensus works because "yes, I have it" is a promise.
+A follower that acknowledges an entry it could not persist can lose it on
+restart, and a leader elected on the strength of that acknowledgement can then
+lose a committed write. A node that cannot persist must stop promising.
+
+Option B (carry on) is right only when something else holds the truth, or when
+the data is disposable: caches, metrics, access logs. Redis loses up to a second
+of writes by default, on purpose.
+
+## Streaming versus whole-log replay
+
+Whole-log: read the entire file into one buffer, decode across it. Simple, one
+meaning for `Incomplete`, but peak memory is log plus memtable plus records, and
+it breaks on a log bigger than expected, which is exactly when recovery can least
+afford an OutOfMemoryError.
+
+Streaming: read a chunk (1 MB), decode records out of it, apply each immediately,
+then read the next. Memory is one chunk plus one record whatever the size. The
+cost is that a record can straddle a chunk boundary, so leftover bytes must be
+carried forward with `compact()`, and `Incomplete` now means either "chunk ended"
+or "log ended" - only end-of-file tells them apart.
+
+Chose streaming: it survives milestone 1.3 unchanged and it is the same technique
+the SSTable reader needs.
+
+## What does "no rotation" mean?
+
+Rotation means: when the log gets big, close it and start `wal-000002.log`. Then
+when a memtable flush makes old records redundant, whole files get deleted.
+
+It exists because you **cannot cheaply remove bytes from the front of a file** -
+there is no such operation. So "forget the first 64 MB" is only possible if that
+part is a separate file. Needed at 1.3, when flushing finally creates something
+to delete. Until then: one file, growing.
+
+## force(false) versus force(true)?
+
+The flag is `metaData`. `true` also flushes file metadata such as timestamps.
+`false` flushes the data plus whatever metadata is needed to **find** that data,
+which includes the file's length. So `false` is cheaper by one metadata write and
+still correct for an append-only log. Truncation uses `force(true)`, because
+there the file length *is* the thing being changed.
+
+## What are "separate channels for recovery"?
+
+A channel is opened with a fixed set of permissions. Recovery needs READ to scan
+and WRITE to truncate the torn tail. Appending wants APPEND, where every write
+goes to the end automatically. So recovery opens its channel, scans, truncates,
+closes; then the writer opens its own append-only channel. Two phases, each with
+the least permission it needs, and no mode switching in the middle.
+
+## Should Incomplete be split into "chunk ended" and "log ended"?
+
+No, not in the codec. The codec only sees the bytes in front of it, so it has no
+evidence for which one it is; inventing the distinction there would be a lie.
+
+The **reader** knows whether the file had more bytes, so the distinction lives in
+its `RecoveryResult.StopReason`: CLEAN_END, TORN_TAIL, CORRUPT. General rule
+worth keeping: each layer reports only what it can actually see, and the layer
+with the extra knowledge adds the interpretation.
+

@@ -280,3 +280,71 @@ Integer.MAX_VALUE and reject a varint with no terminating byte.
 of the record, ready to hand to a channel. The explicit `limit(...)` call is
 redundant, since the buffer was allocated at exactly that size.
 
+## 2026-10-09 — Milestone 1.2 complete: the write-ahead log
+
+**Built.** `WalWriter` (append, write-loop, force, fail-stop), `WalReader`
+(chunked streaming replay into the memtable, truncating what a crash left),
+`RecoveryResult` with a `StopReason`. 12 file-level tests on top of the codec's
+13; 47 tests in the project.
+
+**Invariants.**
+- Writer: append returns only once that record's bytes are durable, and the file
+  is always whole records followed by at most one partial one.
+- Reader: the memtable ends up in exactly the state it had when the last durable
+  record was written, and the file is left holding only that prefix.
+
+**Chose.**
+- **Fail-stop on durability failure (option A).** When `force()` throws we do not
+  know whether the bytes landed, so the writer poisons itself and every later
+  append throws. Carrying on would make the prefix unreasonable about. Postgres
+  reached the same conclusion in 2018: on Linux a failed fsync can drop the dirty
+  pages and report the error once, so a later fsync succeeds for data that is
+  gone. It is also what Raft needs: a node that cannot persist must stop
+  promising, because consensus is built on those promises.
+- **Streaming replay (option B), not whole-log.** Memory is one chunk plus one
+  record whatever the log size; records are applied as they are read so there is
+  no temporary list; the same code survives milestone 1.3's segments; and it uses
+  `compact()`, which the SSTable reader will need too. Cost is roughly 30 lines
+  and one genuinely subtle case.
+- **`Incomplete` stays a single codec result.** The codec cannot tell "this chunk
+  ran out" from "the log ran out": it only sees the bytes in front of it. The
+  reader knows whether the file had more, so the distinction lives in
+  `StopReason` (CLEAN_END / TORN_TAIL / CORRUPT) instead. Each layer reports only
+  what it can see.
+- **A write loop**, because `FileChannel.write` promises only "the number of bytes
+  written". For small writes to a regular file it will take everything every time,
+  which is exactly what makes depending on it dangerous.
+- **`force(false)`**, which flushes the data plus the metadata needed to find it,
+  including the file's new length. `force(true)` would also flush timestamps we
+  never read. Truncation uses `force(true)`, since the length change *is* the
+  metadata there.
+- **The chunk size is a parameter** so tests can set it to 17 bytes and force
+  records across boundaries. The subtle path has to be the easy one to test.
+- **Buffer growth** when a single record exceeds the chunk, doubling up to
+  `HEADER + MAX_RECORD`. Without it a 5 KB record and a 1 KB chunk spin forever.
+- **The reader takes a `SkipList` directly.** A `Memtable` interface is already in
+  docs/deferred.md for 1.3; inventing it now would be a layer with one
+  implementation and no second caller.
+
+**Verified the tests bite, by mutation.**
+- Dropping the `endOfFile` guard, so every `Incomplete` is treated as a torn tail:
+  `recordsSpanningChunkBoundariesAreStillRead` and `aRecordLargerThanTheChunkIsRead`
+  fail. That is the headline streaming bug caught.
+- Disabling truncation: three tests fail, including
+  `appendingAfterRecoveryContinuesTheLog`, which shows the real consequence —
+  leave the torn tail and every future recovery stops at the same byte forever.
+
+**What I got wrong along the way, twice.**
+- My mutation script reported "nothing failed" for both mutations. It captured
+  only stdout, and Gradle prints test failures to stderr. The tooling lied, and I
+  nearly concluded the tests were weak. Merging the streams showed five failures.
+- Earlier in the session Gradle also reported `compileJmhJava UP-TO-DATE` after a
+  benchmark source change, and ran a stale jar. Open question whether to disable
+  the daemon's file-system watching in gradle.properties; running stale code while
+  believing you tested the new code is the worst failure mode a build can have.
+
+**Known gap.** The `kill -9` crash test from milestone 1.9 cannot distinguish
+fsync-per-write from no fsync at all, because killing the process leaves the page
+cache intact and the OS writes it out anyway. Only a real power cut, or a
+simulated one, separates them.
+
