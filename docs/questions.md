@@ -981,3 +981,114 @@ its `RecoveryResult.StopReason`: CLEAN_END, TORN_TAIL, CORRUPT. General rule
 worth keeping: each layer reports only what it can actually see, and the layer
 with the extra knowledge adds the interpretation.
 
+
+## Is the log several files? What if the other half of a record is in the next one?
+
+One file. A "chunk" is only how much of that one file is pulled into the buffer
+at a time.
+
+```
+ONE file:  | rec1  rec2  rec3   rec4   rec5 |
+reads:     |--#1--||--#2--||--#3--|
+```
+
+A record straddling a boundary is split across two **reads of the same file**:
+the bytes are all there, just not fetched yet, and compact() plus the next read
+stitches them. Nothing is missing.
+
+When the **file** is exhausted and leftover bytes do not form a whole record,
+there is nowhere the rest could be: it was never written, because the power died
+mid-write. That is what makes it a torn tail rather than a boundary.
+
+In milestone 1.3 there will be several segment files, but rotation always happens
+**on a record boundary**, so a record never spans two files. That rule exists for
+exactly this reason.
+
+## endOfFile && buffer.hasRemaining(): what does that combination mean?
+
+In read mode `hasRemaining()` means position < limit: unread bytes are in the
+buffer.
+
+| endOfFile | hasRemaining | meaning |
+|---|---|---|
+| false | - | refill the buffer; normal, happens every chunk or two |
+| true | false | CLEAN_END: the last record ended exactly as the file did |
+| true | true | TORN_TAIL: leftover bytes and no more file to complete them |
+
+So "the buffer has content but it is the end of the file" means a half-written
+record whose other half does not exist anywhere.
+
+## What is Path?
+
+`java.nio.file.Path`, Java's type for a filesystem location and the modern
+replacement for `File`. `Path path` is a parameter of that type:
+`Path.of("C:/Users/shabb/dev/ironclad/ironclad.wal")`. Modern file APIs (`Files`,
+`FileChannel.open`) take a Path rather than a String, so separators and relative
+paths are handled instead of being string-concatenated.
+
+## Why is it RecoveryResult.StopReason.CLEAN_END?
+
+`StopReason` is an enum **nested inside** the `RecoveryResult` record, so its full
+name is Outer.Inner. CLEAN_END is the optimistic default: if the loop finishes
+without anything going wrong, the log ended cleanly, and the failure paths
+overwrite it.
+
+## Is there one buffer of chunk size?
+
+Yes. `ByteBuffer.allocate(chunkBytes)` once per replay, reused for every chunk,
+1 MB by default and 17 bytes in the boundary tests. It changes size only if a
+single record turns out to be bigger than it.
+
+## Where is apply defined?
+
+At the bottom of WalReader, and it is the whole bridge from bytes to state:
+
+```java
+private static void apply(WalRecord record, SkipList memtable) {
+    switch (record) {
+        case WalRecord.Put put -> memtable.put(put.key(), put.value());
+        case WalRecord.Delete delete -> memtable.remove(delete.key());
+    }
+}
+```
+
+## "Remember the failure forever" - until when exactly?
+
+`durabilityFailure` is a field on the WalWriter object and nothing clears it, so
+"forever" means as long as that object lives, which in practice is until the
+process restarts. Recovery does not un-poison it: recovery happens in a fresh
+process with a brand-new writer, and the poisoned one died with the old JVM. The
+point is not that the failure is eternal, it is that nothing in this run can talk
+you out of it.
+
+## grow(): the Math.min, full.capacity(), and bigger.put(full.flip())
+
+```java
+int cap  = WalCodec.HEADER_BYTES + WalCodec.MAX_RECORD_BYTES;  // biggest legal record
+int size = Math.min(cap, full.capacity() * 2);                 // double, never past that
+ByteBuffer bigger = ByteBuffer.allocate(size);
+bigger.put(full.flip());
+```
+
+`full` is the parameter name: the buffer that arrived with no room left.
+`full.capacity()` is its current size. Doubling keeps growth steps few; the
+ceiling stops a corrupted length field from walking us up to gigabytes.
+
+`buffer = grow(buffer)` reassigns the variable and nothing shrinks it, so the
+buffer stays big for the rest of that replay call. A later replay starts fresh at
+the chunk size.
+
+`bigger.put(full.flip())` is two steps. After compact(), `full` is in write mode:
+position = leftover count, limit = capacity. `flip()` makes it readable (position
+0, limit = leftover count), and `put` copies those bytes into `bigger`, leaving
+bigger's position at the leftover count. So `bigger` ends up in exactly the state
+compact() produces, with a larger tray.
+
+## Why force(true) after truncate but force(false) after append?
+
+Appending flushes data plus the metadata needed to find it, which is what
+force(false) does. Truncating writes no data at all: its entire effect **is** the
+file's length, which is metadata. Rather than reasoning about whether the cheap
+flush covers a shrinking file, ask for metadata explicitly. If that length change
+were lost in a crash, the torn tail would come back and recovery would stop at the
+same byte again.
