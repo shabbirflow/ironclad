@@ -25,6 +25,24 @@ milestone 1.9 when there are throughput numbers to beat.
 writers, for A, B1 and B2 side by side. Keep the fsync call in one place so
 swapping is a small change.
 
+## Emptying the log
+
+**Now:** the log is never trimmed except for a torn tail. Good records stay
+forever, so the file grows without bound and recovery gets slower on every
+restart.
+
+**Later:** rotate into segments (`wal-000001.log`, `wal-000002.log`, always
+rotating **on a record boundary** so no record spans two files), and delete a
+segment once a memtable flush has written its records to an SSTable in sorted
+form. Deleting is only possible per file, because bytes cannot be removed from
+the front of a file.
+
+**Trigger:** milestone 1.3, the SSTable writer. Flushing is what first makes old
+log records redundant, so there is nothing to delete before it exists.
+
+**What to measure:** recovery time against log size, which milestone 1.9 asks for
+anyway, and the pause a flush-plus-delete introduces.
+
 ## Skip list node layout
 
 **Now:** each node holds its tower as a `Node[]`, so one hop is two

@@ -134,12 +134,16 @@ public final class WalReader {
 
     /** Doubles the buffer, capped at the largest record the codec will accept. */
     private static ByteBuffer grow(ByteBuffer full) {
-        int cap = WalCodec.HEADER_BYTES + WalCodec.MAX_RECORD_BYTES;
-        int size = Math.min(cap, full.capacity() * 2);
-        if (size <= full.capacity()) {
+        int ceiling = WalCodec.HEADER_BYTES + WalCodec.MAX_RECORD_BYTES;
+
+        // Unreachable while decode rejects any length above MAX_RECORD_BYTES: no
+        // legal record can need more room than this. It is here so that raising
+        // the limit later fails loudly instead of spinning in the caller's loop.
+        if (full.capacity() >= ceiling) {
             throw new IllegalStateException("a record claims to be larger than the format allows");
         }
-        ByteBuffer bigger = ByteBuffer.allocate(size);
+
+        ByteBuffer bigger = ByteBuffer.allocate(Math.min(ceiling, full.capacity() * 2));
         bigger.put(full.flip());    // flip: read what compact left, then copy it over
         return bigger;
     }

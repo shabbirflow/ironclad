@@ -1092,3 +1092,43 @@ file's length, which is metadata. Rather than reasoning about whether the cheap
 flush covers a shrinking file, ask for metadata explicitly. If that length change
 were lost in a crash, the torn tail would come back and recovery would stop at the
 same byte again.
+
+## When does the log get emptied?
+
+Today, never. The only trimming is the torn tail; good records stay forever, so
+the file grows without bound and recovery gets slower every restart.
+
+Milestone 1.3 fixes it: once the memtable is flushed to an SSTable, the records
+that produced it are redundant, because that data is now on disk in sorted form.
+Then whole segment files get deleted. Now recorded in docs/deferred.md.
+
+## What happens to the `stop` variable?
+
+It is a local that accumulates the reason and becomes part of the return value:
+
+```java
+RecoveryResult.StopReason stop = CLEAN_END;   // optimistic default
+...
+stop = CORRUPT;   detail = corrupt.reason();
+stop = TORN_TAIL; detail = "N bytes of a half-written record";
+...
+return new RecoveryResult(applied, validBytes, stop, detail);
+```
+
+Callers care because the three mean different things operationally: CLEAN_END is
+a normal shutdown and says nothing; TORN_TAIL is routine after a crash and
+deserves one log line, since nobody was promised that record; CORRUPT means a
+checksum failed on data that **was** fully written, which is a disk going bad and
+worth shouting about. That is why it is not a boolean.
+
+## In grow(), is `size <= full.capacity()` the same as `cap <= full.capacity()`?
+
+Yes. `full.capacity() * 2` is always greater than `full.capacity()`, so
+`Math.min(cap, capacity * 2)` can only come out at or below the capacity when
+`cap` is the smaller one. Rewritten to check the ceiling directly, because it
+states the intent: "are we already as big as the format allows?"
+
+The throw is unreachable while decode rejects any length above MAX_RECORD_BYTES,
+since no legal record can need more room than HEADER + MAX_RECORD. It exists so
+that raising the limit later fails loudly instead of spinning in the caller's
+loop.
