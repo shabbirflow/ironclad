@@ -1132,3 +1132,66 @@ The throw is unreachable while decode rejects any length above MAX_RECORD_BYTES,
 since no legal record can need more room than HEADER + MAX_RECORD. It exists so
 that raising the limit later fails loudly instead of spinning in the caller's
 loop.
+
+## flipByte(firstRecordBytes + HEADER_BYTES + 1): why that byte?
+
+Pointer arithmetic onto a chosen byte. Record one is Put("a","1") = 13 bytes:
+8 header plus 5 payload (kind, key length, key, value length, value).
+
+```
+byte:  0 ----------- 12 | 13 ---- 20 | 21 | 22 | ...
+       |- record one ---| |-crc+len-| kind keyLen     <- record two
+        firstRecordBytes   HEADER_BYTES  +1
+```
+
+- firstRecordBytes steps over record one
+- + HEADER_BYTES steps over record two's crc and length
+- + 1 steps over the kind byte, landing inside record two's **payload**
+
+Payload rather than header on purpose: flipping a payload byte can only produce
+"checksum mismatch", which is what the test asserts. Flipping a length byte might
+trip the "not a real record size" check instead, so the test would be asserting a
+different failure than its name claims.
+
+The point of the test: three records, the second damaged, the **third perfectly
+intact**, and only `a=1` survives. Record three is deliberately destroyed, because
+applying it without record two would build a state that never existed.
+
+## theWriterRefusesEverythingAfterADurabilityFailure, explained
+
+```java
+FileChannel channel = FileChannel.open(log(), CREATE, WRITE, APPEND);
+WalWriter writer = new WalWriter(channel);          // package-private constructor
+writer.append(put("a","1"));                        // fine
+channel.close();                                     // the disk "goes away"
+
+assertThatExceptionOfType(IOException.class)         // 1st append after: real failure
+        .isThrownBy(() -> writer.append(put("b","2")));
+assertThat(writer.isStopped()).isTrue();
+
+assertThatExceptionOfType(IllegalStateException.class)   // 2nd: refused untried
+        .isThrownBy(() -> writer.append(put("c","3")))
+        .withMessageContaining("durability failure");
+```
+
+Closing the channel stands in for a dying disk: any write or force on a closed
+channel throws ClosedChannelException, which is an IOException, the same category
+force() throws when the disk is full or gone. Deterministic and close enough.
+
+The package-private constructor exists for this. `WalWriter.open(path)` owns its
+own channel, so a test could never reach in to break it; a test in the same
+package can hand in a channel it controls.
+
+Two different exception types on purpose:
+- IOException: the write really failed, so the caller must not acknowledge it.
+- IllegalStateException: we did not even try. The writer is poisoned and the call
+  was invalid given its state.
+
+`withMessageContaining("durability failure")` pins that the message explains why,
+because someone reading a log at 3 a.m. needs to know the writer stopped on
+purpose. `isStopped()` is the observable flag a Phase 3 node would use to remove
+itself from the cluster instead of voting on entries it cannot persist.
+
+What the test catches: remove the poisoning and the third append merely hits the
+closed channel again, throwing ClosedChannelException, so the IllegalStateException
+assertion fails. The test pins the remembering, not just the failing.
