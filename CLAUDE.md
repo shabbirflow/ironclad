@@ -91,6 +91,11 @@ if I still want it.
 Before a new component, make me restate the previous invariant in my own
 words. If I'm wrong, correct me and don't move on.
 
+Also quiz me at random moments, not only at component boundaries: a question or
+two about something we built earlier in the session, or in an earlier milestone.
+Spaced recall beats re-reading, and it catches the things I only thought I
+understood.
+
 End of session: append to DECISIONS.md — what we built, what we chose,
 what we rejected, what I didn't fully get.
 
