@@ -348,3 +348,49 @@ fsync-per-write from no fsync at all, because killing the process leaves the pag
 cache intact and the OS writes it out anyway. Only a real power cut, or a
 simulated one, separates them.
 
+
+## 2026-10-20 — Milestone 1.3 part 1: the SSTable writer
+
+**Built.** `SsTableFormat` (the layout in one place), `SsTableWriter`,
+`SsTableInfo`, and `Varints` extracted to a shared package so the WAL and the
+SSTable cannot drift apart. 12 tests that parse the written bytes with a parser
+sharing no code with the writer, including its own varint decoding. 59 tests
+total, all green.
+
+**Layout chosen.**
+```
+file  = [data block]* [index block] [footer : 32]
+block = [entry]* [crc32c : 4]
+entry = [kind : 1][keyLen varint][key][valueLen varint][value]   kind 2 = tombstone, no value
+index = one row per block: [keyLen varint][first key][offset : 8][length : 4]
+footer= [indexOffset : 8][indexLength : 4][entryCount : 8][version : 4][magic : 8]
+```
+
+**Chose.**
+- Blocks sealed by size (~4 KB) rather than entry count, because the page is the
+  unit the operating system actually reads. 128 entries would be 500 bytes of
+  2-byte values or 1.3 MB of 10 KB values.
+- The `kind` byte reserved now, though tombstones only arrive in 1.5. One byte on
+  a 100-byte entry, against every pre-1.5 file becoming unreadable later.
+- Magic last, so its presence proves the writer reached the end. An interrupted
+  flush leaves a file without it: delete and replay, because the WAL is only
+  trimmed after a flush completes. That ordering is the handshake between 1.2
+  and 1.3.
+- Keys must arrive ascending and unique; the writer throws otherwise. A file
+  written out of order would fail to find keys that are in it.
+- One `force(true)` at the end. Nothing in the file is usable before the footer,
+  so there is nothing to protect earlier.
+
+**Open, and honestly unresolved.** Four mutations of the block-sealing logic
+(dropping the empty-block guard, dropping finishBlock's early return, dropping
+both, and switching to count-based sealing) all reported "nothing failed". The
+count-based mutation in particular *should* fail
+`blocksAreSealedAtAboutTheTargetSize`. The guard line matches the mutation string
+exactly, so this looks like the Gradle staleness seen twice before, where the
+daemon runs stale classes after an external edit, rather than weak tests. To
+settle: run the mutation by hand in the IDE, or add
+`org.gradle.vfs.watch=false` to gradle.properties and repeat. Until then the
+sealing policy is **not** considered test-pinned.
+
+**Also noted.** Creating a file durably needs the parent directory fsynced too,
+which Java cannot do portably. Not handled; belongs with the crash testing in 1.9.

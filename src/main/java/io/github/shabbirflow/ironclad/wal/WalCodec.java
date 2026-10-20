@@ -1,5 +1,7 @@
 package io.github.shabbirflow.ironclad.wal;
 
+import io.github.shabbirflow.ironclad.bytes.Varints;
+
 import java.nio.ByteBuffer;
 import java.util.zip.CRC32C;
 
@@ -64,16 +66,16 @@ public final class WalCodec {
             case WalRecord.Delete delete -> null;
         };
 
-        int payloadBytes = 1 + varintBytes(key.length) + key.length
-                + (value == null ? 0 : varintBytes(value.length) + value.length);
+        int payloadBytes = 1 + Varints.length(key.length) + key.length
+                + (value == null ? 0 : Varints.length(value.length) + value.length);
 
         ByteBuffer buffer = ByteBuffer.allocate(HEADER_BYTES + payloadBytes);
         buffer.position(HEADER_BYTES);                      // leave room for the header
         buffer.put(value == null ? KIND_DELETE : KIND_PUT);
-        putVarint(buffer, key.length);
+        Varints.put(buffer, key.length);
         buffer.put(key);
         if (value != null) {
-            putVarint(buffer, value.length);
+            Varints.put(buffer, value.length);
             buffer.put(value);
         }
 
@@ -126,7 +128,7 @@ public final class WalCodec {
         // our own format is wrong rather than the disk having lied.
         ByteBuffer payload = source.slice(start + HEADER_BYTES, length);
         byte kind = payload.get();
-        int keyLength = getVarint(payload);
+        int keyLength = Varints.get(payload);
         if (keyLength < 0 || keyLength > payload.remaining()) {
             return new DecodeResult.Corrupt("key length " + keyLength + " does not fit the record");
         }
@@ -137,7 +139,7 @@ public final class WalCodec {
             case KIND_DELETE -> new DecodeResult.Ok(
                     new WalRecord.Delete(key), HEADER_BYTES + length);
             case KIND_PUT -> {
-                int valueLength = getVarint(payload);
+                int valueLength = Varints.get(payload);
                 if (valueLength < 0 || valueLength > payload.remaining()) {
                     yield new DecodeResult.Corrupt(
                             "value length " + valueLength + " does not fit the record");
@@ -150,70 +152,4 @@ public final class WalCodec {
         };
     }
 
-    // ---- varints: seven bits of number per byte, top bit means "another follows" ----
-    //
-    // Lengths are usually small. A 20-byte key spends one byte on its length this
-    // way and four bytes with a fixed int, and the WAL is the file we write most.
-
-    /**
-     * Counts how many bytes the varint form of this number will take: 1 byte for
-     * 0 to 127, 2 for 128 to 16383, 3 up to about 2 million. It counts and writes
-     * nothing, because the buffer has to be sized before anything goes into it.
-     */
-    static int varintBytes(int value) {
-        int bytes = 1;
-        while ((value & ~0x7F) != 0) {
-            value >>>= 7;
-            bytes++;
-        }
-        return bytes;
-    }
-
-    /**
-     * Writes the number as a varint, highest seven bits first, so it reads left to
-     * right like every other field in the record. The top bit of each byte means
-     * "another byte follows", and is clear on the last one.
-     *
-     * 300 becomes 0x82 0x2C: group 2 with the continuation flag, then group 44.
-     * Reading those groups left to right gives (2 << 7) + 44 = 300.
-     *
-     * High-first needs the byte count before the first byte can be written, which
-     * is why varintBytes exists as its own function. Protobuf and LevelDB do the
-     * reverse; SQLite, MIDI and ASN.1 do it this way.
-     */
-    static void putVarint(ByteBuffer buffer, int value) {
-        int groups = varintBytes(value);
-        for (int group = groups - 1; group >= 0; group--) {
-            int sevenBits = (value >>> (7 * group)) & 0x7F;
-            buffer.put((byte) (group == 0 ? sevenBits : sevenBits | 0x80));
-        }
-    }
-
-    /**
-     * Reads a varint back: shift what we have seven bits left, drop the next
-     * group into the gap, and stop at the first byte whose top bit is clear. No
-     * shift counter needed, because the groups arrive most significant first.
-     *
-     * Returns -1 when the bytes are not a varint: no terminating byte within five
-     * (an int is 32 bits and 5 x 7 = 35), or a value too large for an int.
-     * Accumulating in a long makes that second check possible, since the overflow
-     * would otherwise be silent.
-     */
-    static int getVarint(ByteBuffer buffer) {
-        long result = 0;
-        for (int bytesRead = 0; bytesRead < 5; bytesRead++) {
-            if (!buffer.hasRemaining()) {
-                return -1;
-            }
-            byte b = buffer.get();
-            result = (result << 7) | (b & 0x7F);
-            if (result > Integer.MAX_VALUE) {
-                return -1;
-            }
-            if ((b & 0x80) == 0) {
-                return (int) result;
-            }
-        }
-        return -1;
-    }
 }
