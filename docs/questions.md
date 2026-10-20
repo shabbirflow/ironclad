@@ -1195,3 +1195,81 @@ itself from the cluster instead of voting on entries it cannot persist.
 What the test catches: remove the poisoning and the third append merely hits the
 closed channel again, throwing ClosedChannelException, so the IllegalStateException
 assertion fails. The test pins the remembering, not just the failing.
+
+## How does the entriesInBlock > 0 guard actually work?
+
+```java
+if (entriesInBlock > 0 && blockBytes + entryBytes > 4096) finishBlock();
+appendEntry(entry);     // unconditional
+```
+
+| arriving entry | entries > 0? | would exceed? | seal? | block after |
+|---|---|---|---|---|
+| A (120 B) | no (0) | - | no | 120 B, 1 entry |
+| B (200 B) | yes | no | no | 320 B, 2 |
+| ... | | | | 4000 B, 30 |
+| Z (150 B) | yes | 4150 > 4096 yes | seal | 150 B, 1 |
+| BIG (1 MB) | yes | yes | seal | **1 MB, 1 entry** |
+
+On the last row the guard fires, Z's block is sealed, counters reset to 0 and 0,
+and then `appendEntry` runs unconditionally, so BIG lands in an empty block that
+ends up 1 MB. Nothing checks it again until the next entry arrives, and the index
+records each block's real length, so no reader assumes 4 KB.
+
+Without the guard: block empty, `0 + 1MB > 4096` is true, seal an empty block,
+block still empty, true again, forever. Sealing never makes room because BIG is
+bigger than the target regardless. The guard breaks the cycle: an empty block
+cannot be sealed, so the oversized entry has to land somewhere.
+
+## On delete, do we edit the original record in its SSTable?
+
+Never. The delete goes into the **memtable**, in RAM, exactly like any other
+write, and later gets flushed into a **new** SSTable. An old file is never opened
+for writing again.
+
+Four reasons editing in place is wrong:
+- you would have to find it first, searching every file on every delete
+- it is a random write, the exact thing LSM exists to avoid
+- someone may be reading that file right now, or it is memory-mapped
+- a crash mid-edit corrupts a file that was previously safe forever
+
+So a delete is a write: same path as a put, with kind = 2 and no value. Today
+SkipList.remove unlinks physically, which is fine because nothing is on disk yet;
+milestone 1.5 is where the memtable starts storing a tombstone entry instead.
+
+## Is a block the 4 KB thing?
+
+Yes. An **entry** is one key/value pair (kind, lengths, bytes), tens to hundreds
+of bytes. A **block** is a run of entries stopped at about 4 KB, plus a 4-byte
+checksum. "About", because an entry is never split across blocks, so a block ends
+up 3,980 or 4,090 bytes, or 1 MB in the oversized case. The index records each
+block's exact length.
+
+## What are the index and the footer here?
+
+A table of contents and a signpost pointing at it.
+
+**Index**: one row per **block**, not per key.
+
+```
+block 0  first key "apple"    offset 0      length 4088
+block 1  first key "ferret"   offset 4088   length 4012
+block 2  first key "mango"    offset 8100   length 4096
+```
+
+Looking for "kiwi": binary search those rows, it is >= "ferret" and < "mango", so
+if it exists it is in block 1. Read bytes 4088..8100, one disk read, then scan
+about 100 entries in memory. The index cannot say whether a key exists, only
+which 4 KB to look in; that is what "sparse" means, and it is why 1,000,000 keys
+need only 10,000 rows.
+
+**Footer**: the last 32 bytes, fixed size, holding where the index starts, its
+length, the entry count, a format version and a magic number. The index sits
+after the data because its contents are unknown until every block is written, so
+a reader needs a known place to find out where it went. Like a book whose table
+of contents is printed at the back, with the last page saying "contents begin on
+page 412".
+
+Opening a file: seek to fileSize - 32, read the footer, check the magic, read the
+index, binary search it, read one block, scan it. Two small reads to open, then
+one read per lookup, whatever the file's size.
