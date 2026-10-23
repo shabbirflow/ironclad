@@ -1273,3 +1273,73 @@ page 412".
 Opening a file: seek to fileSize - 32, read the footer, check the magic, read the
 index, binary search it, read one block, scan it. Two small reads to open, then
 one read per lookup, whatever the file's size.
+
+## What does "300 becomes 0x82 0x2C" actually mean?
+
+Varints carry seven bits per byte, so split 300 into seven-bit groups:
+
+```
+300 = 100101100          nine bits, so two groups
+low seven bits: 0101100 = 44
+what remains:        10 = 2        check: 2 * 128 + 44 = 300
+```
+
+300 is "2 then 44" in base 128. High group first:
+
+```
+group 2  -> 0000010 -> continuation bit set -> 1000 0010 = 0x82   more follows
+group 44 -> 0101100 -> bit clear            -> 0010 1100 = 0x2C   last byte
+```
+
+Reading back: 0x82 has the top bit set so result = 2; 0x2C does not, so
+result = (2 << 7) | 44 = 300. `<< 7` is multiplying by 128: it shifts the digits
+already collected one place left in base 128 to make room, exactly like reading
+"47" as (4 * 10) + 7.
+
+## Why does getVarint stop after 5 bytes?
+
+An int is 32 bits and each varint byte carries 7. Four bytes hold 28 bits, which
+is not enough; five hold 35, which is. So no legal int varint exceeds five bytes.
+If five go by without a byte whose top bit is clear, these are not a varint but
+corruption or a misaligned read, and -1 says so. Same instinct as the 16 MB
+record cap: never let corrupt data set a loop bound.
+
+## Checksums per block, not per entry or per file?
+
+Per block, and the rule is **checksum the unit you read**.
+
+| per | cost | why not |
+|---|---|---|
+| entry | 4 bytes on a 60-byte entry, 7% bigger file, thousands of CRCs per lookup | overhead on every byte and every read |
+| block | 4 bytes per 4 KB, 0.1%, one CRC per lookup | this is the one |
+| file | 4 bytes total | you would read all 64 MB to verify one 4 KB block |
+
+The WAL checksums per **record** instead, because it is written incrementally and
+a crash can tear any single record: there the unit of risk is the record. Same
+tool, different failure model.
+
+## The footer fields, one by one
+
+```
+[ indexOffset : 8 ][ indexLength : 4 ][ entryCount : 8 ][ version : 4 ][ magic : 8 ] = 32
+```
+
+- **indexOffset** (long): byte position where the index block starts, different in
+  every file, which is the whole reason the footer exists. A long because files
+  can exceed 2 GB and an int offset would wrap silently.
+- **indexLength** (int): how many bytes to read from there. An int is plenty; the
+  index is a few hundred KB even for a million keys.
+- **entryCount** (long): key/value pairs in the **whole file**, not index rows. The
+  index row count is just the block count, which comes from reading the index.
+  Used for bloom filter sizing (1.6), merge planning (1.7), and a cheap size().
+- **version** (int): 1 today, so a future reader refuses loudly instead of
+  misparsing.
+- **magic** (8 bytes): ASCII IRONCLAD. Identity, plus completeness because it is
+  written last.
+
+## SsTableInfo fields
+
+entryCount = key/value pairs written. blockCount = how many data blocks they
+filled. fileBytes = the file's total size in bytes. firstKey and lastKey = the
+key range, used in 1.5 to skip a file whose range excludes the key, and in 1.7 to
+decide which files overlap and must be merged together.
