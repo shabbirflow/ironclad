@@ -79,6 +79,9 @@ if I still want it.
 ## While coding
 - Start every file with a one-line plain-English comment saying what it is
   for, before any other detail.
+- Comment heavily: a meaningful comment every one to three lines. Short and
+  information-dense, saying why rather than restating the code. Never long
+  paragraphs mid-function.
 - Stop every 50 lines and explain.
 - After writing or changing several files, give me the reading order as one
   bare line, no explanations: `Read in this order: FileA -> FileB -> FileC`.
