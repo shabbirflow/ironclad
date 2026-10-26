@@ -43,19 +43,6 @@ log records redundant, so there is nothing to delete before it exists.
 **What to measure:** recovery time against log size, which milestone 1.9 asks for
 anyway, and the pause a flush-plus-delete introduces.
 
-## A checksum over the SSTable footer
-
-**Now:** data blocks and the index block are each checksummed, but the 32-byte
-footer is not. Corruption there is caught only by the magic bytes failing to
-match, or by an offset that turns out to be implausible.
-
-**Later:** either include a CRC32C of the first 24 bytes inside the footer, or
-extend the footer and keep the magic last. The magic must stay the final bytes
-either way, since its position is what proves the writer reached the end.
-
-**Trigger:** milestone 1.4, the reader, which is the code that would validate it.
-Deciding now costs nothing because no SSTable has been written outside tests.
-
 ## Skip list node layout
 
 **Now:** each node holds its tower as a `Node[]`, so one hop is two

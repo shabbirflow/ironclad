@@ -394,3 +394,63 @@ sealing policy is **not** considered test-pinned.
 
 **Also noted.** Creating a file durably needs the parent directory fsynced too,
 which Java cannot do portably. Not handled; belongs with the crash testing in 1.9.
+
+## 2026-10-26 — No checksum over the SSTable footer
+
+**Decided.** The 32-byte footer stays unchecksummed. Data blocks and the index
+block keep theirs.
+
+**Why, field by field.**
+
+| field | if corrupted | caught |
+|---|---|---|
+| magic | no longer spells IRONCLAD | yes, checked first |
+| version | reads as anything but 1 | yes, unknown version is refused |
+| indexOffset | reader seeks to the wrong place | yes, the index block's own CRC fails |
+| indexLength | reader hashes the wrong byte count | yes, same CRC |
+| entryCount | bad bloom sizing, bad merge estimates | no, but it misdirects no read |
+
+Four of the five fields are already protected, three of them by something else's
+checksum. The unprotected one, `entryCount`, is advisory: nothing is read using
+it, so a wrong value costs a few bloom-filter false positives rather than
+correctness.
+
+**Two conditions, both on the 1.4 reader.**
+1. Bounds-check before trusting the offsets: `0 <= indexOffset` and
+   `indexOffset + indexLength <= fileSize - 32`, so an absurd value is rejected
+   cleanly instead of throwing from inside a buffer.
+2. Check the magic and the version before believing any other footer field.
+
+**Consistency.** This is the same argument as the WAL, where including the length
+inside the checksum turned out to add nothing measurable, because a corrupt
+length makes the decoder hash the wrong range anyway. Having admitted that there,
+calling a footer checksum essential here would be arguing both sides.
+
+**What would change this.** If the footer ever carries a field that a read
+depends on, such as a bloom filter offset or a per-file key range, that field is
+not advisory and the footer needs its own checksum.
+
+## 2026-10-26 — Format costs, measured
+
+The same pair, `user:42` -> `shabbir`, 14 bytes of information:
+
+| | memtable | WAL | SSTable |
+|---|---|---|---|
+| cost | ~96 B | 25 B | ~17.3 B |
+| overhead | ~7x | 79% | 24% |
+| framing unit | a Java object | one record | one block |
+| checksum unit | none | one record | one block |
+| must survive | nothing | a power cut mid-write | being read for years |
+
+In the memtable one entry is four separate Java objects (Node, key array, value
+array, next array), each with a header and padded to 8 bytes. That is why
+`SkipList.ENTRY_OVERHEAD_BYTES = 64` is described as an estimate in its own
+comment: the real figure for small entries is nearer 80, and taller towers add a
+reference per lane. Worth measuring properly at 1.9 rather than guessing again.
+
+The pattern worth keeping: **framing is sized to the failure it defends against.**
+The WAL can be torn mid-record, so it pays per record. An SSTable is never
+modified once written, so it pays per block, with one 4-byte checksum shared
+across roughly 240 entries. The memtable can be lost entirely without
+consequence, so it pays nothing for durability and spends it all on pointers.
+
