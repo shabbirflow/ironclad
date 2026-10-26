@@ -80,11 +80,10 @@ if I still want it.
 - Start every file with a one-line plain-English comment saying what it is
   for, before any other detail.
 - Stop every 50 lines and explain.
-- After writing or changing several files, tell me the order to read them in,
-  with one line on why each comes where it does. I read them line by line, and
-  the wrong order wastes that. Usual shape: format and constants first, then
-  small data types, then the logic, then the tests, with test helpers before
-  test cases.
+- After writing or changing several files, give me the reading order as one
+  bare line, no explanations: `Read in this order: FileA -> FileB -> FileC`.
+  Usual shape: format and constants, then small data types, then the logic,
+  then the tests.
 - After each block: which invariant it holds, and what breaks if it's wrong.
 - Test first. Explain what failure the test catches.
 - No library beyond JUnit, AssertJ, jqwik, JMH and Jackson. If you want

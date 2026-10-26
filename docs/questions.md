@@ -1343,3 +1343,76 @@ entryCount = key/value pairs written. blockCount = how many data blocks they
 filled. fileBytes = the file's total size in bytes. firstKey and lastKey = the
 key range, used in 1.5 to skip a file whose range excludes the key, and in 1.7 to
 decide which files overlap and must be merged together.
+
+## Why 0x7F everywhere in the varint code?
+
+`0x7F` is `0111 1111`: the low **seven** bits, all ones, with the eighth bit
+zero. Seven because a varint byte spends its eighth bit on the continuation flag
+("another byte follows"), leaving seven for the number itself.
+
+So the two idioms read as:
+- `value & 0x7F` -> keep only the seven bits that fit in this byte
+- `value & ~0x7F` -> everything **above** those seven bits, so `!= 0` means
+  "there is more number left"
+- `sevenBits | 0x80` -> switch the flag on, since `0x80` is `1000 0000`
+
+0x7F is the payload mask and 0x80 is the flag.
+
+## Does the block ByteBuffer "grow"?
+
+A ByteBuffer's capacity is fixed when it is allocated, so growing means
+**allocating a bigger one and copying** what is already there, which is what
+`ensureRoom` does.
+
+Normally it never happens: the buffer starts at 4096 + 1024 bytes, and blocks are
+sealed at 4096, so there is always slack for one more ordinary entry. The only
+trigger is a single entry larger than the target, such as a 50 KB value, which is
+legal and gets a block to itself.
+
+Two different numbers worth keeping apart: **4096 is the sealing target** (when to
+start a new block) and **5120 is the buffer's capacity** (how much it can
+physically hold before reallocating).
+
+## What does Varints.put(block, key.length) do in append()?
+
+Writes the key's **length**, so the reader knows how many bytes of key follow
+before the value starts. Same two lines again for the value. Nothing else in the
+entry says where one field ends and the next begins.
+
+## Is there one index entry per block?
+
+Yes, exactly one:
+
+```java
+index.add(new IndexEntry(firstKeyInBlock, fileOffset, length));
+fileOffset += length;
+```
+
+- `firstKeyInBlock` answers "could the key I want be in this block?"
+- `fileOffset` is bytes written so far, so it is where this block **starts**
+- `length` is how many bytes to read
+
+Then `fileOffset += length` moves the running total past this block, so it is
+already correct for the next one. That one variable serves as both "size of the
+file so far" and "offset of whatever comes next".
+
+Blocks are written in key order, so the index rows are in key order too, which is
+what makes binary searching them legal.
+
+## What does writeIndex() do?
+
+Turns the list of index rows into the index block on disk, and returns its size
+so the footer can record it.
+
+1. **Measure.** Walk the rows adding up varint key length + key + 8-byte offset +
+   4-byte length, plus 4 for the checksum. Measuring first means allocating
+   exactly once, with no growing and no guessing.
+2. **Fill.** Walk the rows again writing those fields. `putLong` for the offset
+   because a file can exceed 2 GB; `putInt` for the length because one block
+   never can.
+3. **Checksum.** CRC32C over everything written, appended at the end, exactly like
+   a data block: the index is read as a unit, and a corrupt index sends every
+   lookup to the wrong bytes.
+4. **Write and account.** Write it fully, advance `fileOffset`, return the byte
+   count for the footer's `indexLength`.
+
