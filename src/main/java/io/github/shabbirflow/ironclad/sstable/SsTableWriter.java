@@ -62,7 +62,7 @@ public final class SsTableWriter implements AutoCloseable {
     /** Total key/value pairs, recorded in the footer for later sizing decisions. */
     private long entryCount;
 
-    /** The key range this file covers; 1.5 uses it to skip files, 1.7 to merge. */
+    /** The key range this file covers; */
     private byte[] firstKey;
     private byte[] lastKey;
 

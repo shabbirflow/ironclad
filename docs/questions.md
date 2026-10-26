@@ -1416,3 +1416,93 @@ so the footer can record it.
 4. **Write and account.** Write it fully, advance `fileOffset`, return the byte
    count for the footer's `indexLength`.
 
+## Is 0x7F the continuation check?
+
+No, that is 0x80. Keep them apart:
+
+- `0x80` = `1000 0000` = **the flag**. `(b & 0x80) != 0` asks "is another byte
+  coming?"
+- `0x7F` = `0111 1111` = **the payload mask**. `b & 0x7F` strips the flag off and
+  keeps the seven bits of actual number.
+
+0x80 asks the question; 0x7F takes the data.
+
+## Why is the block buffer 4096 + 1024?
+
+Two different numbers:
+
+- **4096 is the sealing target**: when to stop filling a block.
+- **5120 is the buffer's capacity**: how much it can physically hold.
+
+The slack exists for two reasons. First, a sealed block is entries **plus a
+4-byte checksum**, so a block whose entries reach 4096 needs 4100. Second, an
+entry slightly larger than the target gets a block to itself, and anything up to
+about 5116 bytes fits without reallocating.
+
+It is a performance detail, not correctness: `ensureRoom` grows the buffer for any
+entry of any size. The slack just means that almost never happens.
+
+## What is an "index row", and why is file order also key order?
+
+A row is one line of the table of contents, one per block:
+
+```
+row 0:  first key "apple"    offset 0       length 4088
+row 1:  first key "ferret"   offset 4088    length 4012
+row 2:  first key "mango"    offset 8100    length 4096
+```
+
+`index` is the list of those rows, built as blocks are sealed.
+
+File order is key order because keys arrive sorted and blocks are written in the
+order they fill. So block 0 holds the smallest keys, block 1 the next, and so on,
+which is what makes binary searching the rows legal.
+
+## In the index row, what is the offset, and what are the 8 and the 4?
+
+The **offset** is the byte position in the file where that block starts, so the
+reader can seek straight to it.
+
+The 8 and 4 are **how many bytes those fields take**: `putLong(offset)` is 8
+bytes because a file can exceed 2 GB, and `putInt(length)` is 4 because a single
+block never can. They appear in the measuring pass because the buffer has to be
+sized before anything is written into it.
+
+## "writeIndex returns bytes but its return type is private int"
+
+Three separate things in one line: `private` is visibility, `int` is the return
+type, and `bytes` is just the name of a local variable holding a number of bytes.
+`return bytes;` returns that int, which the caller stores as `indexLength` and
+writes into the footer.
+
+## Why do add() and append() both exist?
+
+`add` and `addTombstone` are the public API: the two different things a caller can
+record. `append` is the private implementation both call, with a different kind
+byte.
+
+Without it, the ordering check, the size calculation, the sealing rule and the
+writing would exist twice, and a fix to one copy would miss the other.
+
+## Is there a whole-file checksum as well as the block ones?
+
+No. The checksums are: **one per data block**, and **one for the index block**.
+Nothing covers the whole file, because verifying one 4 KB read would then mean
+reading all 64 MB.
+
+The footer has no checksum either, which is a real gap: corruption there is
+caught only by the magic bytes or by offsets that turn out to be implausible.
+Recorded in docs/deferred.md.
+
+## When is close() used?
+
+`close()` closes the file channel, and it is called automatically by
+try-with-resources: `try (SsTableWriter writer = SsTableWriter.create(path))`
+calls it at the end of the block, including when something throws.
+
+It is not the same as `finish()`. `finish` writes the index and footer and forces
+the file to disk, making it a valid SSTable; `close` only releases the operating
+system's file handle. Closing without finishing leaves a file with no magic at the
+end, which is exactly what an interrupted flush looks like, and such a file is
+deleted and rebuilt from the log.
+

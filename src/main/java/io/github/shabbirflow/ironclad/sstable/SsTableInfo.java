@@ -10,11 +10,12 @@ package io.github.shabbirflow.ironclad.sstable;
  * together.
  */
 public record SsTableInfo(
-        long entryCount,
-        int blockCount,
-        long fileBytes,
-        byte[] firstKey,
-        byte[] lastKey) {
+    long   entryCount,   // key/value pairs written
+    int    blockCount,   // how many data blocks they filled
+    long   fileBytes,    // the file's total size in bytes
+    byte[] firstKey,    // smallest key in the file
+    byte[] lastKey      // largest key
+    ) {
 
     public boolean isEmpty() {
         return entryCount == 0;
